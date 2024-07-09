@@ -18,8 +18,7 @@ conflicted::conflicts_prefer(dplyr::select,
                              dplyr::filter, 
                              tidyr::extract)
 theme_set(theme_bw() + theme(panel.grid=element_blank()))
-
-dirf("code/fn") |> walk(source)
+source("code/00_fn.R")
 
 
 
@@ -97,51 +96,57 @@ write_csv(lice_df |> filter(!is.na(weeklyAverageAf)), "data/lice_data_nonInterpo
 
 # merge datasets ----------------------------------------------------------
 
-combo.df <- full_join(lice_df |> 
-                        mutate(year=year(weekBeginning), 
-                               month=month(weekBeginning),
-                               day=day(weekBeginning)) |>
-                        select(sepaSite, 
-                               year, month, day, 
-                               weeklyAverageAf), 
-                      biomass_df |> st_drop_geometry() |>
-                        mutate(year=year(date),
-                               month=month(date),
-                               day=day(date)) |>
-                        select(sepaSite,
-                               year, month, day,
-                               actualBiomassOnSiteTonnes) |>
-                        full_join(expand_grid(sepaSite=unique(biomass_df$sepaSite),
-                                              year=2017:2023,
-                                              month=1:12,
-                                              day=1)) |>
-                        mutate(actualBiomassOnSiteTonnes=replace_na(actualBiomassOnSiteTonnes, 0))) |>
-  mutate(week=week(ymd(paste(year, month, day, sep="-")))) |>
-  group_by(sepaSite) |>
-  filter(any(!is.na(actualBiomassOnSiteTonnes))) |>
-  ungroup()
-
-dates.df <- expand_grid(sepaSite=unique(combo.df$sepaSite),
-                        date=seq(ymd("2017-01-01"), ymd("2023-12-31"), by=1)) |>
-  mutate(year=year(date), month=month(date), day=day(date))
-
-# Reporting was only required if averageAf exceeded a threshold:
+# Reporting of lice counts was only required if averageAf exceeded a threshold:
 #  - 2017.Jul - 2019.Jun.09: 3
 #  - 2019.Jun.10 - 2021.Mar.28: 2
 # https://www.gov.scot/publications/fish-health-inspectorate-sea-lice-information/
 # 
 # If no value was given, the smaller of median(day) and the median of (values 
 # below the threshold from 2021-Apr to present) was used
-default_3 <- median(filter(lice_df, weekBeginning > "2021-03-31" & weeklyAverageAf < 3)$weeklyAverageAf)
-default_2 <- median(filter(lice_df, weekBeginning > "2021-03-31" & weeklyAverageAf < 2)$weeklyAverageAf)
-# Assume 240 fish / tonne
-out.df <- left_join(dates.df, combo.df, 
-                    by=c("sepaSite", "year", "month", "day")) |>
-  arrange(sepaSite, year, month, day) |>
-  fill(week) |>
-  # use reported lice value for the whole week
-  group_by(sepaSite, year, week) |>
-  mutate(weeklyAverageAf=median(weeklyAverageAf, na.rm=T)) |>
+default_df <- bind_cols(
+  lice_df |>
+    filter(weekBeginning > "2021-03-31" &
+             weeklyAverageAf < 2) |>
+    mutate(week=week(weekBeginning)) |> 
+    group_by(week) |> 
+    summarise(default_2=median(weeklyAverageAf, na.rm=T)),
+  lice_df |>
+    filter(weekBeginning > "2021-03-31" &
+             weeklyAverageAf < 3) |>
+    mutate(week=week(weekBeginning)) |> 
+    group_by(week) |> 
+    summarise(default_3=median(weeklyAverageAf, na.rm=T)) |>
+    select(default_3),
+  lice_df |>
+    filter(weekBeginning > "2021-03-31") |>
+    mutate(week=week(weekBeginning)) |> 
+    group_by(week) |> 
+    summarise(default_all=median(weeklyAverageAf, na.rm=T)) |>
+    select(default_all)
+)
+default_df <- bind_rows(
+  default_df,
+  default_df |> filter(week %in% c(1, 52)) |>
+    summarise(week=53,
+              across(starts_with("default"), mean))
+)
+
+biomass_interp <- left_join(
+  expand_grid(sepaSite=unique(biomass_df$sepaSite),
+              date=seq(ymd("2017-01-01"), ymd("2023-12-31"), by=1)) |>
+    mutate(year=year(date), month=month(date), day=day(date)),
+  biomass_df |>
+    st_drop_geometry() |>
+    mutate(year=year(date),
+           month=month(date)) |>
+    select(sepaSite,
+           year, month,
+           actualBiomassOnSiteTonnes) |>
+    full_join(expand_grid(sepaSite=unique(biomass_df$sepaSite),
+                          year=2017:2023,
+                          month=1:12,
+                          day=1)) |>
+    mutate(actualBiomassOnSiteTonnes=replace_na(actualBiomassOnSiteTonnes, 0))) |>
   # assume 0 biomass continues through the end of the month
   group_by(sepaSite, year, month) |>
   mutate(actualBiomassOnSiteTonnes=if_else(is.na(actualBiomassOnSiteTonnes) & 
@@ -151,19 +156,49 @@ out.df <- left_join(dates.df, combo.df,
   # interpolate biomass to day (0 until first non-0 value, linear between values)
   group_by(sepaSite) |>
   mutate(actualBiomassOnSiteTonnes=as.numeric(na.fill(zoo(actualBiomassOnSiteTonnes), c(0, "extend", NA)))) |>
+  filter(any(actualBiomassOnSiteTonnes > 0)) |>
   # set biomass constant until end of final reported month, assume 0 after
   group_by(sepaSite, year, month) |>
   mutate(actualBiomassOnSiteTonnes=if_else(is.na(actualBiomassOnSiteTonnes), 
                                            median(actualBiomassOnSiteTonnes, na.rm=T),
-                                           actualBiomassOnSiteTonnes)) |>
-  ungroup() |>
-  # if no lice counts, use min(global daily average, reporting threshold / 10)
-  group_by(year, month, day) |>
+                                           actualBiomassOnSiteTonnes),
+         actualBiomassOnSiteTonnes=replace_na(actualBiomassOnSiteTonnes, 0)) |>
+  ungroup()
+
+lice_interp <- lice_df |>
+  mutate(week=week(weekBeginning),
+         year=year(weekBeginning)) |>
+  right_join(expand_grid(sepaSite=unique(biomass_df$sepaSite),
+                        year=2017:2023,
+                        week=1:53)) |>
+  mutate(weekBeginning=if_else(is.na(weekBeginning),
+                               ymd(paste0(year, "-01-01"))+7*(week-1),
+                               weekBeginning)) |>
+  left_join(default_df, by=join_by(week)) |>
   mutate(weeklyAverageAf=case_when(
     !is.na(weeklyAverageAf) ~ weeklyAverageAf,
-    is.na(weeklyAverageAf) & date<"2019-06-10" ~ min(median(weeklyAverageAf, na.rm=T), default_3, na.rm=T),
-    is.na(weeklyAverageAf) & date>"2019-06-09" ~ min(median(weeklyAverageAf, na.rm=T), default_2, na.rm=T))) |>
-  ungroup() |>
+    is.na(weeklyAverageAf) & weekBeginning < ymd("2019-06-10") ~ default_3,
+    is.na(weeklyAverageAf) & between(weekBeginning, ymd("2019-06-10"), ymd("2021-03-28")) ~ default_2,
+    is.na(weeklyAverageAf) & weekBeginning > ymd("2021-03-28") ~ default_all
+  )) |>
+  select(sepaSite, weekBeginning, weeklyAverageAf) 
+
+combo.df <- full_join(
+  biomass_interp,
+  lice_interp |>
+    mutate(year=year(weekBeginning),
+           month=month(weekBeginning),
+           day=day(weekBeginning)) |>
+    select(sepaSite, 
+           year, month, day,
+           weeklyAverageAf)
+) |>
+  group_by(sepaSite) |>
+  mutate(weeklyAverageAf=as.numeric(na.fill(zoo(weeklyAverageAf), c(NA, "extend", NA)))) |>
+  ungroup()
+  
+
+out.df <- combo.df |>
   mutate(weeklyAverageAf=pmax(weeklyAverageAf, 0.01)) |>
   mutate(total_AF=actualBiomassOnSiteTonnes * 240 * weeklyAverageAf) |>
   arrange(sepaSite, date) |> 
@@ -172,7 +207,7 @@ out.df <- left_join(dates.df, combo.df,
   filter(N_obs > 0) |>
   ungroup() |>
   filter(date <= rollforward(max(biomass_df$date)))
-
+  
 
 # save output -------------------------------------------------------------
 
@@ -213,22 +248,22 @@ out.df |>
   write_csv(glue("data/lice_daily_2023.csv"))
 
 out.df |>
-  filter(year(date) == 2023 & month(date) %in% c(4:5)) |>
+  filter(between(date, ymd("2023-03-17"), ymd("2023-05-31"))) |>
   group_by(sepaSite) |>
   summarise(active=any(actualBiomassOnSiteTonnes>0)) |>
   ungroup() |>
   filter(active) |>
   select(-active) |>
   left_join(sites.i |> st_drop_geometry() |> select(sepaSite, easting, northing)) |>
-  write_csv(glue("data/farm_sites_2023-AprMay.csv"))
+  write_csv(glue("data/farm_sites_2023-MarMay.csv"))
 out.df |>
-  filter(year(date) == 2023 & month(date) %in% c(4:5)) |>
+  filter(between(date, ymd("2023-03-17"), ymd("2023-05-31"))) |>
   mutate(date.c=str_remove_all(date, "-")) |>
   select(sepaSite, date.c, total_AF) |>
   pivot_wider(names_from=date.c, values_from=total_AF) |>
-  filter(sepaSite %in% read_csv("data/farm_sites_2023-AprMay.csv")$sepaSite) |>
+  filter(sepaSite %in% read_csv("data/farm_sites_2023-MarMay.csv")$sepaSite) |>
   mutate(across(where(is.numeric), ~replace_na(.x, 0))) |>
-  write_csv(glue("data/lice_daily_2023-AprMay.csv"))
+  write_csv(glue("data/lice_daily_2023-MarMay.csv"))
 
 
 

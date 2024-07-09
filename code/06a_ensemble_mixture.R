@@ -12,27 +12,49 @@ source("code/00_fn.R")
 
 # Full dataset
 ensFull_df <- read_csv("out/valid_df.csv")
-
-sim_i <- dir("out/biotracker", "sim_i.csv", recursive=T, full.names=T) |>
-  map_dfr(~read_csv(.x) |> select(i, fixDepth) |> mutate(path=.x)) |>
-  filter((grepl("full", path) & i %in% paste0("0", 1:6)) |
-           (grepl("eggT", path) & i %in% str_pad(7:12, 2, "left", "0")) | 
-           (grepl("swim", path) & i %in% 13:20)) |>
-  arrange(i) |>
+sim_i <- read_csv("out/sim_2019-2023/sim_i.csv") |>
   mutate(sim=paste0("sim_", i),
          lab_short=if_else(fixDepth, "2D", "3D")) |>
-  filter(sim %in% names(ensFull_df)) |>
   group_by(lab_short) |>
   mutate(lab=paste0(lab_short, ".", row_number())) |>
   ungroup() |>
-  select(sim, lab_short, lab)
+  select(sim, lab_short, lab) |>
+  bind_rows(
+    tibble(sim=c("predF1", "predF5", "predM", "predMRE", "sim_avg2D", "sim_avg3D", "null"),
+           lab_short=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['M']", "Ens['Mix']", "Mean2D", "Mean3D", "Null"),
+           lab=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['M']", "Ens['Mix']", "Mean2D", "Mean3D", "Null"))
+  ) |>
+  mutate(lab=factor(lab, 
+                    levels=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['M']", "Ens['Mix']", "Mean2D", "Mean3D", 
+                             paste0("2D.", 1:20), paste0("3D.", 1:20), "Null")),
+         lab_short=factor(lab_short, 
+                          levels=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['M']", "Ens['Mix']", "Mean2D", "Mean3D", 
+                                   "2D", "3D", "Null")))
+mods <- expand_grid(mod=c("ranef", "pRE_huRE", "pRE_huRE-R2D2"),
+                    d=c("3D", "all"))
+for(i in 1:nrow(mods)) {
+  fit_df <- ensFull_df |> 
+    filter(year < 2023) |>
+    select(rowNum, sepaSite, sepaSiteNum, productionCycleNumber, date, CoGP_period,
+           licePerFish_rtrt, liceTreat, 
+           any_of(filter(sim_i, lab_short %in% c("3D", ifelse(mods$d[i]=="all", "2D", "")))$sim), 
+           any_of(paste0("c_", filter(sim_i, lab_short %in% c("3D", ifelse(mods$d[i]=="all", "2D", "")))$sim)))
+  dat_rstan <- make_data_rstan(fit_df, R2D2_sd=F)
+  pars <- c("b_p", "b_b0", "b_IP", "b_hu", "sigma", "Intercept_hu",
+            "b_p_uc", "r_grp", "sd_grp")
+  if(grepl("pRE_huRE", mods$mod[i])) {
+    pars <- c(pars, "r_grp_hu", "sd_grp_hu") 
+  }
+  out_ensMix <- stan(file=glue("code/stan/ensemble_mixture_model_{mods$mod[i]}.stan"),
+                       model_name=mods$mod[i],
+                       data=dat_rstan,
+                       chains=30, cores=30, iter=3100, warmup=3000,
+                       control=list(adapt_delta=0.95, max_treedepth=20),
+                       pars=pars)
+  saveRDS(out_ensMix, glue("out/ensembles/ensMix_{mods$d[i]}_{mods$mod[i]}_stanfit.rds"))
+  saveRDS(dat_rstan, glue("out/ensembles/ensMix_{mods$d[i]}_{mods$mod[i]}_standata.rds"))
+}
 
-fit_df <- ensFull_df |> 
-  filter(year < 2023) |>
-  select(rowNum, sepaSite, sepaSiteNum, productionCycleNumber, date, CoGP_period,
-         licePerFish_rtrt, liceTreat, 
-         any_of(filter(sim_i, lab_short %in% c("3D"))$sim), 
-         any_of(paste0("c_", filter(sim_i, lab_short %in% c("3D"))$sim)))
 
 
 # stan model --------------------------------------------------------------
@@ -44,35 +66,44 @@ fit_df <- ensFull_df |>
 #                    chains=6, cores=6, iter=3000, warmup=2500,
 #                    control=list(max_treedepth=20),
 #                    pars=c("b_p", "b_b0", "b_IP", "b_hu", "sigma", "Intercept_hu"))
-# saveRDS(out_ensMix, "out/ensMix_3D_stanfit.rds")
+# saveRDS(out_ensMix, "out/ensMix_all_stanfit.rds")
 # bayesplot::mcmc_intervals(out_ensMix, regex_pars="b_p") + ggtitle("noRE") +
 #   scale_y_discrete(labels=dat_rstan$sim_names) + xlim(0,1)
 
-mod <- "pRE_huRE"
+# mix1: 3D mod="pRE_huRE-R2D2"
+# mix2: all mod="pRE_huRE-R2D2"
+# mix3: 3D mod="pRE_huRE"
+# mix4: all mod="pRE_huRE"
+# mix5: 3D mod="ranef"
+# mix6: all mod="ranef"
+
+mod <- "ranef"
 dat_rstan <- make_data_rstan(fit_df, R2D2_sd=F)
 out_ensMixRE <- stan(file=glue("code/stan/ensemble_mixture_model_{mod}.stan"),
                           model_name=mod,
                           data=dat_rstan,
-                          chains=6, cores=6, iter=3000, warmup=2500,
-                          control=list(adapt_delta=0.9, max_treedepth=20),
+                          chains=3, cores=6, iter=6000, warmup=5500,
+                          control=list(adapt_delta=0.95, max_treedepth=20),
                           pars=c("b_p", "b_b0", "b_IP", "b_hu", "sigma", "Intercept_hu",
-                                 "b_p_uc", "r_grp", "sd_grp", "r_grp_hu", "sd_grp_hu"))
-saveRDS(out_ensMixRE, glue("out/ensMix_3D_{mod}_stanfit.rds"))
-saveRDS(dat_rstan, glue("out/ensMix_3D_{mod}_standata.rds"))
-bayesplot::mcmc_intervals(out_ensMixRE, regex_pars="b_p\\[") + ggtitle(mod) +
-  scale_y_discrete(labels=dat_rstan$sim_names) + xlim(0,1)
+                                 # "r_grp_hu", "sd_grp_hu", # Include for pRE_huRE(-R2D2)
+                                 "b_p_uc", "r_grp", "sd_grp"))
+saveRDS(out_ensMixRE, glue("out/ensembles/ensMix_3D_{mod}_stanfit.rds"))
+saveRDS(dat_rstan, glue("out/ensembles/ensMix_3D_{mod}_standata.rds"))
+# bayesplot::mcmc_intervals(out_ensMixRE, regex_pars="b_p\\[") + ggtitle(mod) +
+#   scale_y_discrete(labels=dat_rstan$sim_names) + xlim(0,1)
 
-dat_rstan <- make_data_rstan(fit_df, R2D2_sd=F)
-out_ensMixRE_R2D2 <- stan(file="code/stan/ensemble_mixture_model_pRE_huRE-R2D2.stan",
-                      model_name="ensMix_pRE_huRE-R2D2",
-                      data=dat_rstan,
-                      chains=6, cores=6, iter=3000, warmup=2500,
-                      control=list(adapt_delta=0.9, max_treedepth=20),
-                      pars=c("b_p", "b_b0", "b_IP", "b_hu", "sigma", "Intercept_hu", 
-                             "b_p_uc", "r_grp", "sd_grp", "r_grp_hu", "sd_grp_hu"))
-saveRDS(out_ensMixRE_R2D2, "out/ensMix_3D_pRE_huRE-R2D2_stanfit.rds")
-bayesplot::mcmc_intervals(out_ensMixRE_R2D2, regex_pars="b_p\\[") + ggtitle("ensMix_pRE_huRE-R2D2") +
-  scale_y_discrete(labels=dat_rstan$sim_names) + xlim(0,1)
+
+# dat_rstan <- make_data_rstan(fit_df, R2D2_sd=F)
+# out_ensMixRE_R2D2 <- stan(file="code/stan/ensemble_mixture_model_pRE_huRE-R2D2.stan",
+#                       model_name="ensMix_pRE_huRE-R2D2",
+#                       data=dat_rstan,
+#                       chains=6, cores=6, iter=3000, warmup=2500,
+#                       control=list(adapt_delta=0.9, max_treedepth=20),
+#                       pars=c("b_p", "b_b0", "b_IP", "b_hu", "sigma", "Intercept_hu", 
+#                              "b_p_uc", "r_grp", "sd_grp", "r_grp_hu", "sd_grp_hu"))
+# saveRDS(out_ensMixRE_R2D2, "out/ensMix_3D_pRE_huRE-R2D2_stanfit.rds")
+# bayesplot::mcmc_intervals(out_ensMixRE_R2D2, regex_pars="b_p\\[") + ggtitle("ensMix_pRE_huRE-R2D2") +
+#   scale_y_discrete(labels=dat_rstan$sim_names) + xlim(0,1)
 
 # dat_rstan <- make_data_rstan(fit_df)
 # out_ensMixRE <- stan(file="code/stan/ensemble_mixture_model_ranef.stan",

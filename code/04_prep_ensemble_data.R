@@ -29,13 +29,7 @@ init_df <- full_join(
   mutate(date=ymd("2019-04-01") + as.numeric(str_sub(date, 3, -1))) |>
   left_join(read_csv("data/lice_biomass_2017-01-01_2023-12-31.csv") |>
               rename(fishTonnes=actualBiomassOnSiteTonnes))
-
-sim_i <- dir("out/biotracker", "sim_i.csv", recursive=T, full.names=T) |>
-  map_dfr(~read_csv(.x) |> select(i, fixDepth) |> mutate(path=.x)) |>
-  filter((grepl("full", path) & i %in% paste0("0", 1:6)) |
-           (grepl("eggT", path) & i %in% str_pad(7:12, 2, "left", "0")) | 
-           (grepl("swim", path) & i %in% 13:20)) |>
-  arrange(i) |>
+sim_i <- read_csv("out/sim_2019-2023/sim_i.csv") |>
   mutate(sim=paste0("sim_", i),
          lab_short=if_else(fixDepth, "2D", "3D")) |>
   group_by(lab_short) |>
@@ -53,18 +47,44 @@ sim_i <- dir("out/biotracker", "sim_i.csv", recursive=T, full.names=T) |>
          lab_short=factor(lab_short, 
                           levels=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['M']", "Ens['Mix']", "Mean2D", "Mean3D", 
                                    "2D", "3D", "Null")))
+# sim_i <- dir("out/biotracker", "sim_i.csv", recursive=T, full.names=T) |>
+#   map_dfr(~read_csv(.x) |> select(i, fixDepth) |> mutate(path=.x)) |>
+#   filter((grepl("full", path) & i %in% paste0("0", 1:6)) |
+#            (grepl("eggT", path) & i %in% str_pad(7:12, 2, "left", "0")) | 
+#            (grepl("swim", path) & i %in% 13:20)) |>
+#   arrange(i) |>
+#   mutate(sim=paste0("sim_", i),
+#          lab_short=if_else(fixDepth, "2D", "3D")) |>
+#   group_by(lab_short) |>
+#   mutate(lab=paste0(lab_short, ".", row_number())) |>
+#   ungroup() |>
+#   select(sim, lab_short, lab) |>
+#   bind_rows(
+#     tibble(sim=c("predF1", "predF5", "predM", "predMRE", "sim_avg2D", "sim_avg3D", "null"),
+#            lab_short=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['M']", "Ens['Mix']", "Mean2D", "Mean3D", "Null"),
+#            lab=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['M']", "Ens['Mix']", "Mean2D", "Mean3D", "Null"))
+#   ) |>
+#   mutate(lab=factor(lab, 
+#                     levels=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['M']", "Ens['Mix']", "Mean2D", "Mean3D", 
+#                              paste0("2D.", 1:20), paste0("3D.", 1:20), "Null")),
+#          lab_short=factor(lab_short, 
+#                           levels=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['M']", "Ens['Mix']", "Mean2D", "Mean3D", 
+#                                    "2D", "3D", "Null")))
 
 
 # load influx -------------------------------------------------------------
 
 # read daily influx for all simulations
-c_daily <- dirrf("out/biotracker", "connectivity_day.rds") |>
-  map_dfr(~readRDS(.x) |> select(sepaSite, date, sim, influx_m2) |>
-            mutate(path=.x)) |>
-  rename(sim_og=sim) |>
-  # mutate(sim=paste0("sim_", str_split_fixed(path, "/", 4)[,3], "_", sim_og))
-  mutate(sim=paste0("sim_", sim_og)) |>
-  arrange(sim_og, sepaSite, date)
+c_daily <- readRDS("out/sim_2019-2023/processed/connectivity_day.rds") |>
+  mutate(sim=paste0("sim_", sim)) |>
+  arrange(sim, sepaSite, date)
+# c_daily <- dirrf("out/biotracker", "connectivity_day.rds") |>
+#   map_dfr(~readRDS(.x) |> select(sepaSite, date, sim, influx_m2) |>
+#             mutate(path=.x)) |>
+#   rename(sim_og=sim) |>
+#   # mutate(sim=paste0("sim_", str_split_fixed(path, "/", 4)[,3], "_", sim_og))
+#   mutate(sim=paste0("sim_", sim_og)) |>
+#   arrange(sim_og, sepaSite, date)
 
 
 
@@ -163,13 +183,12 @@ valid_df <- valid_df |>
   # binary treatment by Code of Good Practice
   mutate(liceThresh=if_else(between(month(date), 2, 6), 0.5, 1), # CoGP
          liceTreat=factor(licePerFish_rtrt^4 > liceThresh, levels=c(FALSE, TRUE)),
+         liceLow=factor(licePerFish_rtrt^4 < 1),
          year=year(date),
          CoGP_period=paste0("CoGP_", liceThresh)) |>
   select(-liceThresh) |>
   arrange(date, sepaSite) |>
-  group_by(sepaSite, productionCycleNumber) |>
-  ungroup() %>%
-  filter(complete.cases(.)) |>
+  drop_na() |>
   mutate(rowNum=row_number(),
          sepaSiteNum=as.numeric(factor(sepaSite))) |>
   rowwise() |>

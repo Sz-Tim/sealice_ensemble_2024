@@ -6,6 +6,9 @@
 .RData
 .RDataTmp
 
+# Stan compiled models
+/code/stan/*.rds
+
 # User-specific files
 .Ruserdata
 

@@ -19,7 +19,7 @@ theme_set(theme_bw() + theme(panel.grid=element_blank()))
 mesh_sf <- st_read("data/WeStCOMS2_mesh.gpkg") |> mutate(vol_top50m=area*pmin(depth, 50))
 mesh_fp <- st_read("data/WeStCOMS2_meshFootprint.gpkg")
 mesh_i <- mesh_sf |> st_drop_geometry() |> select(i, area, vol_top50m)
-out_dir <- "out/longruns_swimSpeed"
+out_dir <- "out/sim_2019-2023"
 sim_i <- read_csv(glue("{out_dir}/sim_i.csv")) |>
   mutate(sim=paste0("sim_", i))
 site_i <- read_csv("data/farm_sites.csv")
@@ -48,7 +48,7 @@ if(FALSE) {
 
 # particle densities ------------------------------------------------------
 
-ps_wide_rtrt <- load_psteps_simSets(out_dir, mesh_i, sim_i, ncores=20, liceScale=1/168, trans="4th_rt")
+ps_wide_rtrt <- load_psteps_simSets(out_dir, mesh_i, sim_i, ncores=30, liceScale=1/168, trans="4th_rt")
 saveRDS(ps_wide_rtrt, glue("{out_dir}/processed/psteps_wide_rtrt.rds"))
 
 
@@ -61,7 +61,7 @@ ps_long_rtrt <- ps_wide_rtrt |>
 
 tictoc::tic()
 ps_avg_rtrt <- ps_long_rtrt |>
-  calc_psteps_avg("rtrt_N_m2", ncores=10, mesh_sf=mesh_sf)
+  calc_psteps_avg("rtrt_N_m2", ncores=30, mesh_sf=mesh_sf)
 tictoc::toc()
 saveRDS(ps_avg_rtrt, glue("{out_dir}/processed/psteps_avg_rtrt.rds"))
 
@@ -71,13 +71,15 @@ gc()
 
 
 
-ps_df <- dirrf("psteps_wide_rtrt.rds") |> map_dfr(readRDS)
+ps_df <- readRDS(glue("{out_dir}/processed/psteps_wide_rtrt.rds"))
 ps_ts <- grep("^t_", names(ps_df), value=T)
 for(i in seq_along(ps_ts)) {
   ps_df |> 
     select(sim, i, all_of(ps_ts[i])) |>
+    drop_na() |>
     arrange(sim, i) |>
     pivot_wider(names_from=sim, values_from=ps_ts[i]) |>
+    mutate(across(starts_with("sim"), ~replace_na(.x, 0))) |>
     saveRDS(paste0("out/sim_2019-2023/processed/weekly/Mature_", ps_ts[i], ".rds"))
 }
 
@@ -90,7 +92,7 @@ for(i in seq_along(ps_ts)) {
 plan(multisession, workers=40)
 c_long <- future_map_dfr(dirrf(out_dir, "connectivity.*csv"),
                          ~load_connectivity(.x, site_i$sepaSite, liceScale=1/24) |>
-                           mutate(sim=str_sub(str_split_fixed(.x, "sim_", 2)[,2], 1, 2)))
+                           mutate(sim=str_sub(str_split_fixed(.x, "sim_", 3)[,3], 1, 2)))
 plan(sequential)
 
 # filter so that only sites with fish are included

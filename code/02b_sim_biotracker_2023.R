@@ -9,7 +9,6 @@ library(tidyverse); library(glue)
 library(sevcheck) # devtools::install_github("Sz-Tim/sevcheck")
 library(biotrackR) # devtools::install_github("Sz-Tim/biotrackR")
 library(doFuture)
-library(foreach)
 theme_set(theme_bw() + theme(panel.grid=element_blank()))
 
 
@@ -17,7 +16,7 @@ theme_set(theme_bw() + theme(panel.grid=element_blank()))
 # define parameters -------------------------------------------------------
 
 cores_per_sim <- 25
-parallel_sims <- 4
+parallel_sims <- 2
 start_date <- "2023-01-01"
 end_date <- "2023-12-31"
 nDays <- length(seq(ymd(start_date), ymd(end_date), by=1))
@@ -38,21 +37,18 @@ dirs <- switch(
                jar="C:/Users/sa04ts/OneDrive - SAMS/Projects/00_packages/biotracker/out/biotracker.jar",
                out=glue("{getwd()}/out/sim_2023"))
 )
-sim.i <- expand_grid(fixDepth=c("false", "true"),
-                     variableDh=c("false", "true"),
-                     variableDhV=c("false", "true"),
-                     eggTemp=c(F, T),
-                     swimSpeed=5e-4) |>
-  filter(! (fixDepth=="true" & variableDhV=="true")) |>
-  arrange(eggTemp, variableDh, desc(fixDepth), variableDhV) |>
-  bind_rows(expand_grid(fixDepth="false", 
-                        variableDh=c("false", "true"),
-                        variableDhV=c("false", "true"),
-                        eggTemp=F,
-                        swimSpeed=c(1e-3, 1e-4)) |>
-              arrange(swimSpeed, variableDh, variableDhV)) |>
+sim.i <- bind_rows(
+  expand_grid(fixDepth="false",
+              salinityMort=c("false", "true"),
+              eggTemp=c(F, T),
+              swimSpeed=seq(1e-4, 1e-3, length.out=4)),
+  expand_grid(fixDepth="true",
+              salinityMort=c("false", "true"),
+              eggTemp=c(F, T),
+              swimSpeed=1e-4)
+) |>
   mutate(i=str_pad(row_number(), 2, "left", "0"),
-         outDir=glue("{dirs$out}/sim_{i}/"))
+         outDir=glue("{dirs$out}/sim_{i}/")) 
 write_csv(sim.i, glue("{dirs$out}/sim_i.csv")) 
 sim_seq <- 1:nrow(sim.i)
 
@@ -76,19 +72,17 @@ walk(sim_seq,
        checkOpenBoundaries="true",
        openBoundaryThresh=2000,
        fixDepth=sim.i$fixDepth[.x],
-       salinityMort="true",
-       eggTemp_b0=if_else(sim.i$eggTemp[.x], 1.1866, 28.2),
-       eggTemp_b1=if_else(sim.i$eggTemp[.x], 4.9841, 0),
+       salinityMort=sim.i$salinityMort[.x],
+       eggTemp_b0=if_else(sim.i$eggTemp[.x], 0.17, 28.2),
+       eggTemp_b1=if_else(sim.i$eggTemp[.x], 4.28, 0),
        vertSwimSpeedMean=-sim.i$swimSpeed[.x],
        vertSwimSpeedStd=sim.i$swimSpeed[.x]/5,
        sinkingRateMean=sim.i$swimSpeed[.x],
        sinkingRateStd=sim.i$swimSpeed[.x]/5,
-       variableDh=sim.i$variableDh[.x],
-       variableDhV=sim.i$variableDhV[.x],
        connectivityThresh=100,
        recordVertDistr="true",
        vertDistrInterval=24,
-       vertDistrMax=50,
+       vertDistrMax=30,
        recordConnectivity="false",
        recordPsteps="false",
        recordElemActivity="false",
@@ -100,6 +94,7 @@ walk(sim_seq,
 # run simulations ---------------------------------------------------------
 
 plan(multisession, workers=parallel_sims)
+sim_seq <- sim_seq[-(1:2)]
 sim_sets <- split(sim_seq, rep(1:parallel_sims, length(sim_seq)/parallel_sims))
 foreach(j=1:parallel_sims) %dofuture% {
   for(i in sim_sets[[j]]) {

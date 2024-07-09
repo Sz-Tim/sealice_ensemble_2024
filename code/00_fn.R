@@ -1,6 +1,65 @@
 
 
 
+
+
+
+clean_mss_lice_xlsx <- function(f_xlsx) {
+  library(readxl)
+  list(
+    # 2017
+    read_xlsx(f_xlsx, sheet=1, range="A3:FD84", col_types="text",
+              col_names=c("siteNo", "siteName", "businessName", "businessNo",
+                          c(outer(c("count_", "mitigation_", "action_"), 
+                                  1:52, 
+                                  paste0)))) |>
+      pivot_longer(contains("_"), names_to=c(".value", "week"), names_sep="_") |>
+      mutate(weeklyAverageAf=as.numeric(count),
+             week=as.numeric(week),
+             weekBeginning=ymd("2017-01-01") + (week-1)*7),
+    # 2018
+    read_xlsx(f_xlsx, sheet=2, range="A3:FD57", col_types="text",
+              col_names=c("siteNo", "siteName", "businessName", "businessNo",
+                          c(outer(c("count_", "mitigation_", "action_"), 
+                                  1:52, 
+                                  paste0)))) |>
+      pivot_longer(contains("_"), names_to=c(".value", "week"), names_sep="_") |>
+      mutate(weeklyAverageAf=as.numeric(count),
+             week=as.numeric(week),
+             weekBeginning=ymd("2018-01-01") + (week-1)*7),
+    # 2019
+    read_xlsx(f_xlsx, sheet=3, range="A3:FD83", col_types="text",
+              col_names=c("siteNo", "siteName", "businessName", "businessNo",
+                          c(outer(c("count_", "mitigation_", "action_"), 
+                                  1:52, 
+                                  paste0)))) |>
+      pivot_longer(contains("_"), names_to=c(".value", "week"), names_sep="_") |>
+      mutate(weeklyAverageAf=as.numeric(count),
+             week=as.numeric(week),
+             weekBeginning=ymd("2019-01-01") + (week-1)*7),
+    # 2020
+    read_xlsx(f_xlsx, sheet=4, range="A3:HH78", col_types="text",
+              col_names=c("siteNo", "siteName", "businessName", "businessNo",
+                          c(outer(c("count_", "mitigation_", "addInfo_", "action_"), 
+                                  1:53, 
+                                  paste0)))) |>
+      select(-starts_with("addInfo_")) |>
+      pivot_longer(contains("_"), names_to=c(".value", "week"), names_sep="_") |>
+      mutate(weeklyAverageAf=as.numeric(count),
+             week=as.numeric(week),
+             weekBeginning=ymd("2020-01-01") + (week-1)*7)
+  ) |>
+    reduce(bind_rows) |>
+    select(siteNo, siteName, weekBeginning, weeklyAverageAf)
+}
+
+
+
+
+
+
+
+
 make_data_rstan <- function(df, R2D2_sd=TRUE) {
   library(tidyverse)
   zeros <- df$licePerFish_rtrt==0
@@ -33,7 +92,7 @@ make_data_rstan <- function(df, R2D2_sd=TRUE) {
 
 
 
-make_predictions_ensMix <- function(out, newdata, iter=2000, seed=NULL, mode="epred", re=FALSE) {
+make_predictions_ensMix <- function(out, newdata, iter=2000, seed=NULL, mode="epred", re=TRUE, re_hu=FALSE) {
   library(tidyverse); library(rstan)
   # hurdle component is fitted with centered IP
   
@@ -52,15 +111,19 @@ make_predictions_ensMix <- function(out, newdata, iter=2000, seed=NULL, mode="ep
   
   if(re) {
     r_grp <- rstan::extract(out, pars="r_grp")[[1]]
-    r_grp_hu <- rstan::extract(out, pars="r_grp_hu")[[1]]
     for(i in 1:ncol(preds)) {
       ensIP[,i] <- dat_ls$X[i,,drop=F] %*% t(r_grp[iters, dat_ls$J_group[i],,drop=T])
-      hu_RE[,i] <- cbind(1, dat_ls$Xc[i,,drop=F]) %*% t(r_grp_hu[iters, dat_ls$J_group[i],])
     }
   } else {
     b_p <- rstan::extract(out, pars="b_p")[[1]]
     for(i in 1:ncol(preds)) {
       ensIP[,i] <- dat_ls$X[i,,drop=F] %*% t(b_p[iters,,drop=F])
+    }
+  }
+  if(re_hu) {
+    r_grp_hu <- rstan::extract(out, pars="r_grp_hu")[[1]]
+    for(i in 1:ncol(preds)) {
+      hu_RE[,i] <- cbind(1, dat_ls$Xc[i,,drop=F]) %*% t(r_grp_hu[iters, dat_ls$J_group[i],])
     }
   }
   
