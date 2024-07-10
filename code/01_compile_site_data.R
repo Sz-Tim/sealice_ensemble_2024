@@ -41,17 +41,38 @@ download_sepa_licenses("data/aquaculture_scot/se_licence_conditions.csv")
 sepa.locs <- read_csv("data/aquaculture_scot/se_licence_conditions.csv") |>
   filter(salmon==TRUE & waterType=="Seawater") |>
   st_as_sf(coords=c("easting", "northing"), crs=27700, remove=F) %>%
-  filter(c(st_within(., mesh.fp, sparse=F))) |>
+  mutate(dist=as.numeric(st_distance(., mesh.fp)[,1])) |>
+  filter(dist < 1000) |>
   rename(sepaSite=sepaSiteId) |>
-  select(sepaSite, easting, northing, geometry)
+  mutate(operator=if_else(operator=="Wester Ross Salmon Ltd", "Wester Ross Fisheries Ltd", operator)) |>
+  st_drop_geometry() |>
+  # relocate sites that are outside WeStCOMS2 mesh due to coastal simplification
+  mutate(easting=if_else(sepaSite=="RONAR1", 161050, easting),
+         northing=if_else(sepaSite=="RONAR1", 855080, northing)) |>
+  mutate(easting=if_else(sepaSite=="PLOI1", 206760, easting),
+         northing=if_else(sepaSite=="PLOI1", 916230, northing)) |>
+  st_as_sf(coords=c("easting", "northing"), crs=27700, remove=F) |>
+  select(sepaSite, operator, easting, northing, geometry)
 mss.locs <- read_csv("data/aquaculture_scot/ms_site_details.csv") |>
   filter(aquacultureType=="Fish" & waterType=="Seawater") |>
   st_as_sf(coords=c("easting", "northing"), crs=27700, remove=F) %>%
-  filter(c(st_within(., mesh.fp, sparse=F))) |>
+  mutate(dist=as.numeric(st_distance(., mesh.fp)[,1])) |>
+  filter(dist < 1000) |>
   rename(mssID=marineScotlandSiteId) |>
-  select(mssID, easting, northing, geometry)
+  mutate(operator=if_else(operator=="Bakkafrost Scotland", "Bakkafrost Scotland Ltd", operator),
+         operator=if_else(operator=="Landcatch Natural Selection Ltd", "Landcatch Ltd", operator)) |>
+  select(mssID, operator, easting, northing, geometry)
 sites.i <- sepa.locs %>%
-  mutate(mssID=mss.locs$mssID[st_nearest_feature(., mss.locs)])
+  mutate(mssID=mss.locs$mssID[st_nearest_feature(., mss.locs)]) |>
+  left_join(mss.locs |>
+              st_drop_geometry() |>
+              select(mssID, operator) |> 
+              rename(mss_operator=operator))
+sites.i$dist <- apply(st_distance(sites.i, mss.locs), 1, min)
+sites_validation <- sites.i |>
+  filter(operator == mss_operator) |>
+  slice_min(dist, by=mssID) |>
+  select(sepaSite, mssID, easting, northing, geometry)
 
 biomass_df <- read_csv("data/aquaculture_scot/biomass_monthly_reports.csv") |>
   mutate(year=year(date)) |>
@@ -67,7 +88,7 @@ biomass_df <- read_csv("data/aquaculture_scot/biomass_monthly_reports.csv") |>
 # <CoGP = 0.1
 # >X = X+1
 # 998 = 0
-lice_df <- clean_mss_lice_xlsx("data/aquaculture_scot/Sea+Lice+data+2017+-+2020.xlsx") |>
+lice_compiled <- clean_mss_lice_xlsx("data/aquaculture_scot/Sea+Lice+data+2017+-+2020.xlsx") |>
   bind_rows(read_xlsx("data/aquaculture_scot/Sea+Lice+Publication+until+week+12%2C++Mar+2021_CLEAN.xlsx") |>
               janitor::clean_names(case="small_camel") |>
               rename(weeklyAverageAf=avgAfNoFish,
@@ -78,7 +99,7 @@ lice_df <- clean_mss_lice_xlsx("data/aquaculture_scot/Sea+Lice+data+2017+-+2020.
   bind_rows(read_csv("data/aquaculture_scot/ms_sea_lice_2021-present.csv") |>
               select(starts_with("site"), 
                      weekBeginning, weeklyAverageAf, mitigation)) |>
-  filter(siteNo %in% sites.i$mssID) |>
+  mutate(siteNo=str_to_upper(siteNo)) |>
   group_by(siteNo, weekBeginning) |>
   summarise(weeklyAverageAf=mean(weeklyAverageAf, na.rm=T),
             mitigation=paste(unique(mitigation), collapse=", ")) |>
@@ -86,11 +107,21 @@ lice_df <- clean_mss_lice_xlsx("data/aquaculture_scot/Sea+Lice+data+2017+-+2020.
   mutate(mitigation=str_remove(mitigation, ", NA") |>
            str_remove(",$") |>
            str_replace(",,", ","),
-         mitigation=na_if(mitigation, "NA")) |>
+         mitigation=na_if(mitigation, "NA"))
+# Align with SEPA sites for lice release
+lice_df <- lice_compiled |>
+  filter(siteNo %in% sites.i$mssID) |>
   right_join(sites.i |> st_drop_geometry() |> select(sepaSite, mssID), y=_, 
              by=c("mssID"="siteNo"), relationship="many-to-many")
-write_csv(lice_df |> filter(!is.na(weeklyAverageAf)), "data/lice_data_nonInterpolated.csv")
-
+# Keep as-is for validation
+lice_validation <- lice_compiled |> 
+  rename(mssID=siteNo) |>
+  filter(!is.na(weeklyAverageAf)) |>
+  inner_join(sites_validation |> st_drop_geometry()) |>
+  filter(weekBeginning > "2019-04-01") |>
+  arrange(sepaSite, weekBeginning) |>
+  select(sepaSite, mssID, weekBeginning, weeklyAverageAf, mitigation)
+write_csv(lice_validation, "data/lice_data_nonInterpolated.csv")
 
 
 
