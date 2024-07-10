@@ -39,10 +39,12 @@ dirs <- switch(
   )
 sim.i <- bind_rows(
   expand_grid(fixDepth="false",
+              variableDhV=c("false", "true"),
               salinityMort=c("false", "true"),
               eggTemp=c(F, T),
-              swimSpeed=seq(1e-4, 1e-3, length.out=4)),
+              swimSpeed=c(1e-4, 1e-3)),
   expand_grid(fixDepth="true",
+              variableDhV="false",
               salinityMort=c("false", "true"),
               eggTemp=c(F, T),
               swimSpeed=1e-4)
@@ -51,7 +53,6 @@ sim.i <- bind_rows(
          outDir=glue("{dirs$out}/sim_{i}/"))
 write_csv(sim.i, glue("{dirs$out}/sim_i.csv")) 
 sim_seq <- 1:nrow(sim.i)
-
 
 
 # set properties ----------------------------------------------------------
@@ -72,6 +73,7 @@ walk(sim_seq,
        checkOpenBoundaries="true",
        openBoundaryThresh=2000,
        fixDepth=sim.i$fixDepth[.x],
+       variableDhV=sim.i$variableDhV[.x],
        salinityMort=sim.i$salinityMort[.x],
        eggTemp_b0=if_else(sim.i$eggTemp[.x], 0.17, 28.2),
        eggTemp_b1=if_else(sim.i$eggTemp[.x], 4.28, 0),

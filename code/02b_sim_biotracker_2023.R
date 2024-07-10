@@ -31,21 +31,19 @@ dirs <- switch(
              jar="/home/sa04ts/biotracker/biotracker.jar",
              out=glue("{getwd()}/out/sim_2023")),
   windows=list(proj=getwd(),
-               mesh="D:/hydroOut",
-               hydro="D:/hydroOut/WeStCOMS2/Archive",
-               jdk="C:/Users/sa04ts/.jdks/openjdk-17.0.1/bin/javaw",
+               mesh="E:/hydroOut",
+               hydro="E:/hydroOut/WeStCOMS2/Archive",
+               jdk="C:/Users/sa04ts/.jdks/openjdk-22.0.1/bin/javaw",
+               # jdk="C:/Users/sa04ts/.jdks/openjdk-19/bin/javaw",
                jar="C:/Users/sa04ts/OneDrive - SAMS/Projects/00_packages/biotracker/out/biotracker.jar",
-               out=glue("{getwd()}/out/sim_2023"))
+               out="D:/sealice_ensembling/out/sim_2023")
 )
 sim.i <- bind_rows(
   expand_grid(fixDepth="false",
+              variableDhV=c("false", "true"),
               salinityMort=c("false", "true"),
               eggTemp=c(F, T),
-              swimSpeed=seq(1e-4, 1e-3, length.out=4)),
-  expand_grid(fixDepth="true",
-              salinityMort=c("false", "true"),
-              eggTemp=c(F, T),
-              swimSpeed=1e-4)
+              swimSpeed=c(1e-4, 1e-3))
 ) |>
   mutate(i=str_pad(row_number(), 2, "left", "0"),
          outDir=glue("{dirs$out}/sim_{i}/")) 
@@ -72,6 +70,7 @@ walk(sim_seq,
        checkOpenBoundaries="true",
        openBoundaryThresh=2000,
        fixDepth=sim.i$fixDepth[.x],
+       variableDhV=sim.i$variableDhV[.x],
        salinityMort=sim.i$salinityMort[.x],
        eggTemp_b0=if_else(sim.i$eggTemp[.x], 0.17, 28.2),
        eggTemp_b1=if_else(sim.i$eggTemp[.x], 4.28, 0),
@@ -94,7 +93,7 @@ walk(sim_seq,
 # run simulations ---------------------------------------------------------
 
 plan(multisession, workers=parallel_sims)
-sim_seq <- sim_seq[-(1:2)]
+sim_seq <- 9:16
 sim_sets <- split(sim_seq, rep(1:parallel_sims, length(sim_seq)/parallel_sims))
 foreach(j=1:parallel_sims) %dofuture% {
   for(i in sim_sets[[j]]) {
