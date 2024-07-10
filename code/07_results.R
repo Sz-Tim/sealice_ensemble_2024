@@ -382,6 +382,49 @@ p_full <- cowplot::plot_grid(
   ncol=2, labels=c("a", ""))
 ggsave("figs/pub/ens_mix_p.png", p_full, width=7, height=6)
 
+
+# Posterior summaries
+swim_post |> group_by(swimSpeed) |> sevcheck::get_intervals(p)
+eggTemp_post |> group_by(eggTemp) |> sevcheck::get_intervals(p)
+salMort_post |> group_by(salinityMort) |> sevcheck::get_intervals(p)
+
+# Comparisons
+swim_post |> group_by(iter) |> 
+  summarise(dConst_f=first(p)-last(p)) |> 
+  ungroup() |> 
+  summarise(pG0=mean(dConst_f>0),
+            mnDiff=mean(dConst_f),
+            CI_025=quantile(dConst_f, probs=0.025),
+            CI_05=quantile(dConst_f, probs=0.05),
+            CI_10=quantile(dConst_f, probs=0.1),
+            CI_90=quantile(dConst_f, probs=0.9),
+            CI_95=quantile(dConst_f, probs=0.95),
+            CI_975=quantile(dConst_f, probs=0.975))
+eggTemp_post |> group_by(iter) |> 
+  summarise(dConst_f=first(p)-last(p)) |> 
+  ungroup() |> 
+  summarise(pG0=mean(dConst_f>0),
+            mnDiff=mean(dConst_f),
+            CI_025=quantile(dConst_f, probs=0.025),
+            CI_05=quantile(dConst_f, probs=0.05),
+            CI_10=quantile(dConst_f, probs=0.1),
+            CI_90=quantile(dConst_f, probs=0.9),
+            CI_95=quantile(dConst_f, probs=0.95),
+            CI_975=quantile(dConst_f, probs=0.975))
+salMort_post |> group_by(iter) |> 
+  summarise(dConst_f=first(p)-last(p)) |> 
+  ungroup() |> 
+  summarise(pG0=mean(dConst_f>0),
+            mnDiff=mean(dConst_f),
+            CI_025=quantile(dConst_f, probs=0.025),
+            CI_05=quantile(dConst_f, probs=0.05),
+            CI_10=quantile(dConst_f, probs=0.1),
+            CI_90=quantile(dConst_f, probs=0.9),
+            CI_95=quantile(dConst_f, probs=0.95),
+            CI_975=quantile(dConst_f, probs=0.975))
+
+
+
 # scatterplots ------------------------------------------------------------
 
 ensTest_df <- read_csv("out/ensemble_oos.csv")
@@ -704,14 +747,6 @@ plot_grid(plotlist=ens_map, ncol=2, nrow=3, labels="auto", byrow=FALSE,
 
 mesh_fp <- st_read("data/WeStCOMS2_meshFootprint.gpkg")
 ensTest_df <- read_csv("out/ensemble_oos.csv")
-odd_i <- function(x) {
-  indexes <- seq_along(x)
-  indexes[indexes %% 2==1]
-}
-even_i <- function(x) {
-  indexes <- seq_along(x)
-  indexes[indexes %% 2==0]
-}
 
 r_info <- tibble(breaks=seq(-1, 1, by=0.25)) |>
   mutate(break_labs=as.character(round(breaks, 1)),
