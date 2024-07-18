@@ -15,7 +15,7 @@ theme_set(theme_bw() + theme(panel.grid=element_blank()))
 
 # define parameters -------------------------------------------------------
 
-cores_per_sim <- 20
+cores_per_sim <- 12
 parallel_sims <- 1
 start_date <- "2023-03-17"
 end_date <- "2023-05-31"

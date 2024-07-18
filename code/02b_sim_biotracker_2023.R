@@ -15,8 +15,8 @@ theme_set(theme_bw() + theme(panel.grid=element_blank()))
 
 # define parameters -------------------------------------------------------
 
-cores_per_sim <- 25
-parallel_sims <- 2
+cores_per_sim <- 19
+parallel_sims <- 1
 start_date <- "2023-01-01"
 end_date <- "2023-12-31"
 nDays <- length(seq(ymd(start_date), ymd(end_date), by=1))
@@ -61,8 +61,11 @@ walk(sim_seq,
        properties_file_path=glue("{dirs$out}/sim_{sim.i$i[.x]}.properties"),
        parallelThreads=cores_per_sim,
        start_ymd=as.numeric(str_remove_all(start_date, "-")),
-       sitefile=glue("{dirs$proj}/data/farm_sites_2023.csv"),
-       siteDensityPath=glue("{dirs$proj}/data/lice_daily_2023.csv"),
+       # sitefile=glue("{dirs$proj}/data/farm_sites_2023.csv"),
+       # siteDensityPath=glue("{dirs$proj}/data/lice_daily_2023.csv"),
+       sitefile="D:/sealice_ensembling/data/farm_sites_2023.csv",
+       sitefileEnd="D:/sealice_ensembling/data/farm_sites_2023.csv",
+       siteDensityPath="D:/sealice_ensembling/data/lice_daily_2023.csv",
        mesh1=glue("{dirs$mesh}/WeStCOMS2_mesh.nc"),
        datadir=glue("{dirs$hydro}/"),
        numberOfDays=nDays,
@@ -93,7 +96,6 @@ walk(sim_seq,
 # run simulations ---------------------------------------------------------
 
 plan(multisession, workers=parallel_sims)
-sim_seq <- 9:16
 sim_sets <- split(sim_seq, rep(1:parallel_sims, length(sim_seq)/parallel_sims))
 foreach(j=1:parallel_sims) %dofuture% {
   for(i in sim_sets[[j]]) {
