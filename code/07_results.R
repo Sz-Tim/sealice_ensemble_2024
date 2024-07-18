@@ -24,8 +24,7 @@ cmr <- readRDS("../../00_misc/cmr_cmaps.RDS")
 
 # Full dataset
 ensFull_df <- read_csv("out/valid_df.csv") |>
-  mutate(liceTreat=factor(liceTreat),
-         lice_g05=factor(licePerFish_rtrt^4 > 0.5))
+  mutate(lice_g05=factor(licePerFish_rtrt^4 > 0.5))
 
 site_i <- read_csv("data/farm_sites.csv") 
 sim_i <- read_csv("out/sim_2019-2023/sim_i.csv") |>
@@ -51,71 +50,40 @@ sim_i <- read_csv("out/sim_2019-2023/sim_i.csv") |>
 
 # ensemble results --------------------------------------------------------
 
-ensTest_df <- ensFull_df |>
-  filter(year==2023) |>
-  group_by(sepaSite) |>
-  mutate(nObs=sum(licePerFish_rtrt > 0)) |>
-  ungroup() |>
-  filter(nObs > 5) |>
+
+ensCV_df <- ensFull_df |> 
+  select(rowNum, sepaSite, year, date, licePerFish_rtrt, lice_g05) |>
+  left_join(read_csv("out/candidates/CV_candidate_predictions.csv")) |>
+  left_join(read_csv("out/ensembles/CV_avg_predictions.csv")) |>
+  left_join(read_csv("out/ensembles/CV_ensMix_predictions.csv") |>
+              select(rowNum, IP_ranef_3D) |> rename(IP_predMix=IP_ranef_3D)) |>
+  left_join(read_csv("out/ensembles/CV_ensFc-1_rmse.csv") |>
+              select(rowNum, .pred) |> rename(IP_predF1=.pred)) |>
+  left_join(read_csv("out/ensembles/CV_ensFc-1_roc_auc.csv") |>
+              select(rowNum, .pred) |> rename(pr_predF1=.pred)) |>
+  left_join(read_csv("out/ensembles/CV_ensFc-5_rmse.csv") |>
+              select(rowNum, .pred) |> rename(IP_predF5=.pred)) |>
+  left_join(read_csv("out/ensembles/CV_ensFc-5_roc_auc.csv") |>
+              select(rowNum, .pred) |> rename(pr_predF5=.pred))
+
+years <- unique(ensFull_df$year)
+ensNull <- vector("list", length(years))
+for(yr in seq_along(years)) {
+  ensNull[[yr]] <- ensFull_df |>
+    filter(year != years[yr]) |>
+    mutate(week=floor(week(date)/2)) |>
+    group_by(week) |>
+    summarise(IP_null=mean(licePerFish_rtrt)) |>
+    ungroup() |>
+    mutate(year=years[yr])
+}
+ensCV_df <- ensCV_df |>
   mutate(week=floor(week(date)/2)) |>
-  left_join(ensFull_df |>
-              filter(year < 2023) |>
-              mutate(week=floor(week(date)/2)) |>
-              group_by(week) |>
-              summarise(IP_null=mean(licePerFish_rtrt)) |>
-              ungroup()) |>
+  left_join(reduce(ensNull, bind_rows)) |>
   select(-week)
 
-# Mixing ensemble
-out_ensMix_3D <- readRDS("out/ensembles/ensMix_3D_ranef_stanfit.rds")
 
-# Forecasting ensemble validation predictions 
-out_ensFcst <- full_join(
-  dirf("out/ensembles", "^lice.*_best_preds_1wk") |>
-    map(~readRDS(.x) |> 
-          select(.row, any_of(c(".pred", ".pred_TRUE"))) |>
-          group_by(.row) |> slice_tail(n=1) |> ungroup()) |>
-    reduce(full_join) |>
-    rename(IP_predF1=.pred, pr_predF1=.pred_TRUE),
-  dirf("out/ensembles", "^lice.*_best_preds_5wk") |>
-    map(~readRDS(.x) |> 
-          select(.row, any_of(c(".pred", ".pred_TRUE"))) |>
-          group_by(.row) |> slice_tail(n=1) |> ungroup()) |>
-    reduce(full_join) |>
-    rename(IP_predF5=.pred, pr_predF5=.pred_TRUE)) |>
-  rename(rowNum=.row)
-  
-# Merge predictions
-ensTest_df <- ensTest_df |>
-  mutate(
-    IP_predMix=make_predictions_ensMix(
-      out_ensMix_3D,
-      newdata=ensTest_df |>
-        select(-contains("sim_avg"), -any_of(filter(sim_i, lab_short=="2D")$sim)),
-      re=T, re_hu=F) |>
-        colMeans(),
-    ) |>
-  left_join(out_ensFcst)
-
-pred_sims <- map_dfc(grep("^sim_[0-9]", sim_i$sim, value=T), 
-                     ~glue("out/candidates/{.x}_RE_stanfit.rds") |>
-                       readRDS() |>
-                       make_predictions_candidate(ensTest_df, .x, re=T) |>
-                       colMeans() |>
-                       as_tibble() |>
-                       set_names(paste0("IP_", .x))) 
-pred_avgs <- map_dfc(grep("^sim_avg", sim_i$sim, value=T), 
-                     ~glue("out/ensembles/{.x}_RE_stanfit.rds") |>
-                       readRDS() |>
-                       make_predictions_candidate(ensTest_df, .x, re=T) |>
-                       colMeans() |>
-                       as_tibble() |>
-                       set_names(paste0("IP_", .x))) 
-ensTest_df <- ensTest_df |>
-  select(-matches("sim")) |>
-  bind_cols(pred_sims) |>
-  bind_cols(pred_avgs)
-write_csv(ensTest_df, "out/ensemble_oos.csv")
+write_csv(ensCV_df, "out/ensemble_CV.csv")
 
 
 
@@ -126,25 +94,23 @@ write_csv(ensTest_df, "out/ensemble_oos.csv")
 # - Median(within-site values): R2, r, RMSE, ROC-AUC, PR-AUC
 # - Values (among site mean): R2, r, RMSE
 
-ensTest_df <- read_csv("out/ensemble_oos.csv") 
-ensTest_df <- ensTest_df |>
-  mutate(liceTreat=factor(liceTreat),
-         lice_g05=factor(licePerFish_rtrt^4 > 0.5)) 
+ensCV_df <- read_csv("out/ensemble_CV.csv") |>
+  mutate(lice_g05=factor(lice_g05)) 
 
 # Global
 metrics_global <- full_join(
-  ensTest_df |>
+  ensCV_df |>
     pivot_longer(starts_with("IP_"), names_to="sim") |>
     mutate(sim=str_remove(sim, "IP_")) |>
     group_by(sim) |>
     summarise(rsq=rsq_vec(value, truth=licePerFish_rtrt),
-              r=cor(value, licePerFish_rtrt, use="pairwise"),
+              r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
               rmse=rmse_vec(value, truth=licePerFish_rtrt),
               N=n(),
               prop_g05=mean(lice_g05=="TRUE"),
               prop_0=mean(licePerFish_rtrt==0)) |>
     ungroup(),
-  ensTest_df |>
+  ensCV_df |>
     select(-starts_with("IP_predF")) |> rename_with(~str_replace(.x, "pr_pred", "IP_pred")) |>
     pivot_longer(starts_with("IP_"), names_to="sim") |>
     filter(!is.na(value)) |>
@@ -155,15 +121,14 @@ metrics_global <- full_join(
     ungroup()
 )
 
-
-# Median within-site
+# Mean within-site
 metrics_within <- full_join(
-  ensTest_df |>
+  ensCV_df |>
     pivot_longer(starts_with("IP_"), names_to="sim") |>
     mutate(sim=str_remove(sim, "IP_")) |>
     group_by(sepaSite, sim) |>
     summarise(rsq=rsq_vec(value, truth=licePerFish_rtrt),
-              r=cor(value, licePerFish_rtrt, use="pairwise"),
+              r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
               rmse=rmse_vec(value, truth=licePerFish_rtrt),
               N=n(),
               prop_g05=mean(lice_g05=="TRUE"),
@@ -176,7 +141,7 @@ metrics_within <- full_join(
               prop_g05=mean(prop_g05),
               prop_0=mean(prop_0, na.rm=T)) |>
     ungroup(),
-  ensTest_df |>
+  ensCV_df |>
     select(-starts_with("IP_predF")) |> rename_with(~str_replace(.x, "pr_pred", "IP_pred")) |>
     pivot_longer(starts_with("IP_"), names_to="sim") |>
     filter(!is.na(value)) |>
@@ -191,7 +156,7 @@ metrics_within <- full_join(
 )
 
 # Site means
-metrics_among <- ensTest_df |>
+metrics_among <- ensCV_df |>
   pivot_longer(starts_with("IP_"), names_to="sim") |>
   mutate(sim=str_remove(sim, "IP_")) |>
   group_by(sepaSite, sim) |>
@@ -201,7 +166,7 @@ metrics_among <- ensTest_df |>
             prop_0=mean(licePerFish_rtrt==0)) |>
   group_by(sim) |>
   summarise(rsq=rsq_vec(value, truth=licePerFish_rtrt),
-            r=cor(value, licePerFish_rtrt, use="pairwise"),
+            r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
             rmse=rmse_vec(value, truth=licePerFish_rtrt),
             N=n(),
             prop_g05=mean(prop_g05),
@@ -215,51 +180,36 @@ all_metrics_df <- bind_rows(
 ) |>
   pivot_longer(any_of(c("rmse", "rsq", "r", "ROC_AUC", "PR_AUC")), names_to="metric") |>
   filter(metric %in% c("rmse", "r", "ROC_AUC", "PR_AUC")) |>
-  mutate(metric=factor(metric, levels=c("ROC_AUC", "PR_AUC", "rmse", "rsq", "r"),
-                       labels=c("'AUC'['ROC']", "'AUC'['PR']", "RMSE", "R^2", "r"))) |>
+  mutate(metric=factor(metric, levels=c("ROC_AUC", "PR_AUC", "rsq", "r", "rmse"),
+                       labels=c("'AUC'['ROC']", "'AUC'['PR']", "R^2", "rho", "RMSE"))) |>
   left_join(sim_i) |>
   arrange(lab) |>
   mutate(type=factor(type, levels=c("global", "within", "among"))) |>
   drop_na()
 
-ggplot(all_metrics_df, aes(type, value, colour=lab_short, shape=lab_short, size=lab_short)) + 
-  geom_point() + 
-  facet_wrap(~metric, nrow=1, scales="free") + 
-  scale_colour_manual(values=c(1, 2, 3, 4, 5, 4, 5, "grey")) + 
-  scale_shape_manual(values=c(19, 19, 19, 1, 1, 1, 1, 4)) + 
-  scale_size_manual(values=c(3, 3, 3, 2, 2, 1, 1, 2))
-
-
 all_metrics_labs <- all_metrics_df |>
-  filter(metric=="r",
+  filter(metric=="RMSE",
          type=="within",
          grepl("(Null|Mean|Ens)", lab_short)) |>
   arrange(lab) |>
-  mutate(label=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['Mix']", "'2D'", "'3D'", "Null"),
-         value=seq(1.01, 0.81, length.out=6)) %>%
+  mutate(label=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['Mix']", "'3D'", "Null"),
+         value=seq(0.975, 0.775, length.out=5)) %>%
   bind_rows(., 
             . |> 
               filter(grepl("Mean", lab_short)) |>
-              mutate(lab=c("2D.1", "3D.1"),
-                     lab_short=c("2D", "3D"),
-                     label=c(NA, NA)))
+              mutate(lab=c("3D.1"),
+                     lab_short=c("3D"),
+                     label=c(NA)))
 
-all_metrics_df |>
+p_a <- all_metrics_df |>
   arrange(desc(lab)) |>
   ggplot() + 
   geom_point(aes(type, value, colour=lab_short, shape=lab_short, size=lab_short, alpha=lab_short)) + 
-  # geom_text(data=all_metrics_df |> slice_head(n=1),
-  #           aes(label=paste0("n: ", N, "\n",
-  #                            round(prop_treat*100), "% > threshold\n",
-  #                            round(prop_0*100), "% 0's")),
-  #           x=1.35, y=0.975, size=2.5, colour="grey30") +
-  # annotate("rect", xmin=5.03, xmax=6, ymin=0.775, ymax=1.1, colour="grey80", fill="white", linewidth=0.2) +
   geom_text(data=all_metrics_labs, aes(type, value, label=label, colour=lab_short),
-            hjust=0, nudge_x=0.6, vjust=0.5, size=2.5, parse=T) +
-  geom_point(data=all_metrics_labs, position=position_nudge(x=0.2),
+            hjust=0, nudge_x=0.75, vjust=0.5, size=2.5, parse=T) +
+  geom_point(data=all_metrics_labs, position=position_nudge(x=0.55),
              aes(type, value, colour=lab_short, shape=lab_short, size=lab_short), alpha=1) +
-  # scale_x_discrete(labels=scales::parse_format(), expand=expansion(mult=c(0.1, 0.25))) +
-  scale_y_continuous("Out-of-sample score (2023)", breaks=seq(0, 1, by=0.5),
+  scale_y_continuous("Cross-validation score", breaks=seq(0, 1, by=0.5),
                      minor_breaks=seq(0, 1, by=0.1), limits=c(0, 1), oob=scales::oob_keep) +
   facet_grid(.~metric, scales="free_x", space="free_x", labeller=label_parsed) + 
   scale_colour_manual(values=c("black", "black", "red",
@@ -271,14 +221,29 @@ all_metrics_df |>
   scale_shape_manual(values=c(19, 1, 19, 4, 4, 1, 1, 3)) +
   scale_size_manual(values=c(rep(1.5, 5), rep(0.5, 2), 1)) +
   scale_alpha_manual(values=c(1, 1, 1, 1, 1, 0.5, 0.5, 1)) +
-  theme(panel.grid.major.y=element_line(colour="grey85", linewidth=0.2),
-        panel.grid.minor.y=element_line(colour="grey90", linewidth=0.1),
+  theme(panel.grid.major.y=element_line(colour="grey85", linewidth=0.4),
+        panel.grid.minor.y=element_line(colour="grey90", linewidth=0.2),
         axis.title.x=element_blank(),
         axis.text.x=element_text(vjust=0.5),
         legend.position="none")
-ggsave("figs/pub/validation_metrics_2023.png", width=6, height=3.5)
 
+p_b <- ensCV_df |>
+  filter(date > "2021-06-01") |>
+  group_by(date) |>
+  summarise(r=cor(licePerFish_rtrt, IP_predMix, use="pairwise", method="spearman")) |>
+  ggplot(aes(date, r)) + 
+  geom_point() +  
+  scale_x_date(date_breaks="1 year", date_minor_breaks="3 months", date_labels="%Y") +
+  scale_y_continuous(expression("Ens"["Mix"]~"weekly"~rho), 
+                     limits=c(0, 1), breaks=c(0, 0.5, 1)) +
+  theme_bw() + 
+  theme(axis.title.x=element_blank(),
+        panel.grid.major.y=element_line(colour="grey85", linewidth=0.4),
+        panel.grid.minor.y=element_line(colour="grey90", linewidth=0.2))
 
+cowplot::plot_grid(p_a, p_b, nrow=2, align="hv", axis="lr", 
+                   rel_heights=c((1+sqrt(5))/2, 1), labels="auto")
+ggsave("figs/pub/validation_metrics_CV.png", width=6, height=6)
 
 
 
@@ -288,8 +253,8 @@ ggsave("figs/pub/validation_metrics_2023.png", width=6, height=3.5)
 # mixing proportions ------------------------------------------------------
 
 # Mixing ensemble
-out_ensMixRE <- readRDS("out/ensembles/ensMix_3D_ranef_stanfit.rds")
-dat_ensMixRE <- readRDS("out/ensembles/ensMix_3D_ranef_standata.rds")
+out_ensMixRE <- readRDS("out/ensembles/ensMix_3D_ranef_FULL_stanfit.rds")
+dat_ensMixRE <- readRDS("out/ensembles/ensMix_3D_ranef_FULL_standata.rds")
 
 b_p_post <- rstan::extract(out_ensMixRE, pars="b_p")[[1]] |>
   as_tibble(.name_repair="minimal") |>
@@ -298,21 +263,23 @@ b_p_post <- rstan::extract(out_ensMixRE, pars="b_p")[[1]] |>
   pivot_longer(-iter, names_to="Simulation", values_to="p") |>
   mutate(lab_short=str_sub(Simulation, 1, 2),
          Simulation=factor(Simulation, levels=levels(sim_i$lab)))
-p <- ggplot(b_p_post, aes(p, Simulation, colour=lab_short, fill=lab_short)) + 
-  stat_slab(normalize="xy", scale=0.7, colour=NA, fill="dodgerblue4", 
-            aes(slab_alpha=after_stat(-pmax(abs(1-2*cdf), 0.5)))) +
-  stat_pointinterval(.width=c(0.5, 0.8, 0.95), shape=1, colour="dodgerblue4") +
+p_a <- ggplot(b_p_post, aes(p, Simulation, colour=lab_short, fill=lab_short)) + 
+  stat_slab(normalize="xy", scale=0.7, colour=NA, fill="dodgerblue4",
+            aes(slab_alpha=after_stat(-pmax(abs(1-2*cdf), 0.5))), fill_type="gradient") +
+  stat_pointinterval(.width=c(0.5, 0.8, 0.95), colour="dodgerblue4") +
   scale_y_discrete(limits=rev(sort(unique(b_p_post$Simulation)))) + 
   scale_slab_alpha_continuous(range=c(0.01, 0.8)) +
   xlim(0, 1) +
-  labs(x=expression(paste("Ensemble mixing weight (", italic(pi[k]), ")")),
-       y="Simulation") +
-  theme(legend.position="none")
+  labs(x=expression(paste("Ensemble mixing weight (", italic(pi[~~k]), ")")),
+       y="Simulation variant") +
+  theme(legend.position="none",
+        axis.title=element_text(size=9),
+        axis.text=element_text(size=7))
 
 
 sim_key <- read_csv("out/sim_2019-2023/sim_i.csv") |> 
   mutate(sim=paste0("sim_", i)) |>
-  select(sim, salinityMort, eggTemp, swimSpeed) |> 
+  select(sim, salinityMort, eggTemp, swimSpeed, variableDhV) |> 
   inner_join(sim_i) |>
   rename(Simulation=lab)
 swim_post <- b_p_post |>
@@ -321,8 +288,8 @@ swim_post <- b_p_post |>
   summarise(p=sum(p)) |>
   ungroup() |>
   arrange(swimSpeed) |>
-  mutate(swimSpeed=factor(swimSpeed, levels=c(0.0001, 0.0004, 0.0007, 0.001), 
-                          labels=paste(c("0.01", "0.04", "0.07", "0.10"), "cm/s")))
+  mutate(swimSpeed=factor(swimSpeed, levels=c(0.001, 0.0001), 
+                          labels=paste(c("0.10", "0.01"), "cm/s")))
 eggTemp_post <- b_p_post |>
   inner_join(sim_key |> select(Simulation, eggTemp)) |>
   group_by(eggTemp, iter) |>
@@ -339,54 +306,53 @@ salMort_post <- b_p_post |>
   arrange(salinityMort) |>
   mutate(salinityMort=factor(salinityMort, levels=c(TRUE, FALSE), 
                              labels=c("f(Sal.)", "Constant")))
+vertDiff_post <- b_p_post |>
+  inner_join(sim_key |> select(Simulation, variableDhV)) |>
+  group_by(variableDhV, iter) |>
+  summarise(p=sum(p)) |>
+  ungroup() |>
+  arrange(variableDhV) |>
+  mutate(variableDhV=factor(variableDhV, levels=c(TRUE, FALSE), 
+                             labels=c("Modelled", "Constant")))
 
-p_ls <- vector("list", 3)
-p_ls[[1]] <- swim_post |>
-  ggplot(aes(p, swimSpeed)) + 
+p_b <- swim_post |> mutate(var="Vertical swim speed") |> rename(name=swimSpeed) |>
+  bind_rows(eggTemp_post |> mutate(var="Egg production") |> rename(name=eggTemp)) |>
+  bind_rows(salMort_post |> mutate(var="Larval mortality") |> rename(name=salinityMort)) |>
+  bind_rows(vertDiff_post |> mutate(var="Vertical diffusivity") |> rename(name=variableDhV)) |>
+  mutate(var=factor(var, levels=c("Egg production", "Larval mortality",
+                                  "Vertical swim speed", "Vertical diffusivity")),
+         name=lvls_reorder(name, c(1, 2, 3, 5, 6, 4))) |>
+  ggplot(aes(p, name)) + 
   stat_slab(normalize="xy", scale=0.7, colour=NA, fill="dodgerblue4",
-            aes(slab_alpha=after_stat(-pmax(abs(1-2*cdf), 0.5)))) +
+            aes(slab_alpha=after_stat(-pmax(abs(1-2*cdf), 0.5))), fill_type="gradient") +
   stat_pointinterval(.width=c(0.5, 0.8, 0.95), shape=1, colour="dodgerblue4") +
   scale_slab_alpha_continuous(range=c(0.01, 0.8)) +
   xlim(0, 1) +
-  labs(x=expression(paste("Mixing weight (", italic(pi[k]), ")")),
-       y="Vertical swim speed") +
+  labs(x=expression(paste("Total mixing weight (", italic(pi[~~k]), ")"))) +
+  facet_grid(var~., scales="free_y", switch="y") +
+  scale_y_discrete(position="right") +
   theme(legend.position="none",
-        axis.text.x=element_blank(),
-        axis.title.x=element_blank())
-p_ls[[2]] <- eggTemp_post |>
-  ggplot(aes(p, eggTemp)) + 
-  stat_slab(normalize="xy", scale=0.7, colour=NA, fill="dodgerblue4",
-            aes(slab_alpha=after_stat(-pmax(abs(1-2*cdf), 0.5)))) +
-  stat_pointinterval(.width=c(0.5, 0.8, 0.95), shape=1, colour="dodgerblue4") +
-  scale_slab_alpha_continuous(range=c(0.01, 0.8)) +
-  xlim(0, 1) +
-  labs(x=expression(paste("Mixing weight (", italic(pi[k]), ")")),
-       y="Egg production") +
-  theme(legend.position="none",
-        axis.text.x=element_blank(),
-        axis.title.x=element_blank())
-p_ls[[3]] <- salMort_post |>
-  ggplot(aes(p, salinityMort)) + 
-  stat_slab(normalize="xy", scale=0.7, colour=NA, fill="dodgerblue4",
-            aes(slab_alpha=after_stat(-pmax(abs(1-2*cdf), 0.5)))) +
-  stat_pointinterval(.width=c(0.5, 0.8, 0.95), shape=1, colour="dodgerblue4") +
-  scale_slab_alpha_continuous(range=c(0.01, 0.8)) +
-  xlim(0, 1) +
-  labs(x=expression(paste("Ensemble mixing weight (", italic(pi[k]), ")")),
-       y="Larval mortality") +
-  theme(legend.position="none")
+        axis.title=element_text(size=9),
+        axis.text=element_text(size=7),
+        axis.title.y=element_blank(),
+        strip.background=element_blank())
 
-p_full <- cowplot::plot_grid(
-  p,
-  cowplot::plot_grid(plotlist=p_ls, ncol=1, align="v", axis="tblr", labels=c("b", "c", "d")),
-  ncol=2, labels=c("a", ""))
+p_full <- cowplot::plot_grid(p_a, p_b, ncol=2, labels=c("a", "b"))
 ggsave("figs/pub/ens_mix_p.png", p_full, width=7, height=6)
 
 
 # Posterior summaries
-swim_post |> group_by(swimSpeed) |> sevcheck::get_intervals(p)
-eggTemp_post |> group_by(eggTemp) |> sevcheck::get_intervals(p)
-salMort_post |> group_by(salinityMort) |> sevcheck::get_intervals(p)
+bind_rows(
+  swim_post |> mutate(var="swimSpeed") |> rename(name=swimSpeed) |> 
+    group_by(var, name) |> sevcheck::get_intervals(p),
+  eggTemp_post |> mutate(var="eggTemp") |> rename(name=eggTemp) |> 
+    group_by(var, name) |> sevcheck::get_intervals(p),
+  salMort_post |> mutate(var="salinityMort") |> rename(name=salinityMort) |> 
+    group_by(var, name) |> sevcheck::get_intervals(p),
+  vertDiff_post |> mutate(var="variableDhV") |> rename(name=variableDhV) |> 
+    group_by(var, name) |> sevcheck::get_intervals(p)
+)
+
 
 # Comparisons
 swim_post |> group_by(iter) |> 
@@ -412,6 +378,17 @@ eggTemp_post |> group_by(iter) |>
             CI_95=quantile(dConst_f, probs=0.95),
             CI_975=quantile(dConst_f, probs=0.975))
 salMort_post |> group_by(iter) |> 
+  summarise(dConst_f=first(p)-last(p)) |> 
+  ungroup() |> 
+  summarise(pG0=mean(dConst_f>0),
+            mnDiff=mean(dConst_f),
+            CI_025=quantile(dConst_f, probs=0.025),
+            CI_05=quantile(dConst_f, probs=0.05),
+            CI_10=quantile(dConst_f, probs=0.1),
+            CI_90=quantile(dConst_f, probs=0.9),
+            CI_95=quantile(dConst_f, probs=0.95),
+            CI_975=quantile(dConst_f, probs=0.975))
+vertDiff_post |> group_by(iter) |> 
   summarise(dConst_f=first(p)-last(p)) |> 
   ungroup() |> 
   summarise(pG0=mean(dConst_f>0),
@@ -743,10 +720,78 @@ plot_grid(plotlist=ens_map, ncol=2, nrow=3, labels="auto", byrow=FALSE,
 
 
 
+
+# fig overview inset ------------------------------------------------------
+
+ens_avg <- readRDS("out/sim_2019-2023/processed/ens_avg.rds")
+
+# WeStCOMS mesh
+mesh_fp <- st_read("data/WeStCOMS2_meshFootprint.gpkg")
+examp_mesh <- st_read("data/WeStCOMS2_mesh.gpkg") |> select(i, geom) |> 
+  st_crop(c(xmin=90000, xmax=200000, ymin=820000, ymax=920000))
+ggplot() + 
+  geom_sf(data=mesh_fp, fill="grey", colour="grey30", linewidth=0.2) + 
+  scale_x_continuous(limits=c(100000, 194000)) + 
+  scale_y_continuous(limits=c(850000, 899000)) + 
+  theme(axis.title=element_blank(), 
+        axis.text=element_blank(), 
+        axis.ticks=element_blank(), 
+        legend.position="none") + 
+  geom_sf(data=ens_avg |> right_join(examp_mesh, y=_), aes(fill=ens_mn), colour=NA) + 
+  scale_fill_viridis_c(option="turbo")
+ggsave("figs/pub/fig_overview_example_map.png", width=5.5, height=3)
+
+
+
+
+
+# r stormcloud ------------------------------------------------------------
+
+ensCV_df <- read_csv("out/ensemble_CV.csv")
+
+farm_r.df <- ensCV_df |>
+  group_by(sepaSite) |>
+  summarise(across(starts_with("IP"), ~cor(.x, licePerFish_rtrt, use="pairwise", method="spearman")),
+            N=n()) |>
+  # filter(N > 10) |>
+  inner_join(site_i) |>
+  select(sepaSite, IP_null, contains("avg"), contains("pred")) |>
+  pivot_longer(starts_with("IP"), names_to="sim") |>
+  mutate(sim=str_remove(sim, "IP_")) |>
+  left_join(sim_i) |>
+  droplevels()
+farm_r.df |> 
+  group_by(lab) |>
+  summarise(mn=mean(value), se=sd(value)/sqrt(n())) |>
+  ggplot(aes(mn, lab, xmin=mn-2*se, xmax=mn+2*se)) +
+  geom_pointrange() + 
+  scale_fill_scico_d(palette="glasgow", guide="none") +
+  scale_colour_scico_d(palette="glasgow", guide="none") +
+  scale_y_discrete(breaks=levels(farm_r.df$lab), labels=parse(text=levels(farm_r.df$lab))) +
+  scale_x_continuous(eval("Farm-level Spearman's"~rho), limits=c(-1, 1)) +
+  theme(panel.grid.major=element_line(colour="grey90", linewidth=0.2),
+        axis.title.y=element_blank())
+farm_r.df |>
+  ggplot(aes(value, lab, fill=lab_short, colour=lab_short)) + 
+  geom_dots(side="bottom", scale=0.5) + 
+  stat_slab(normalize="xy", scale=0.5, colour=NA, 
+            aes(slab_alpha=after_stat(-pmax(abs(1-2*cdf), 0.5)))) +
+  stat_pointinterval(.width=c(0.5, 0.8, 0.95), colour="black") +
+  scale_slab_alpha_continuous(range=c(0.1, 0.5), guide="none") +
+  scale_fill_scico_d(palette="glasgow", guide="none", end=0.8) +
+  scale_colour_scico_d(palette="glasgow", guide="none", end=0.8) +
+  scale_y_discrete(breaks=levels(farm_r.df$lab), labels=parse(text=levels(farm_r.df$lab))) +
+  scale_x_continuous(eval("Farm-level Spearman's"~rho), limits=c(-1, 1)) +
+  theme(panel.grid.major=element_line(colour="grey90", linewidth=0.2),
+        axis.title.y=element_blank())
+  
+
+
+
 # maps of r ---------------------------------------------------------------
 
 mesh_fp <- st_read("data/WeStCOMS2_meshFootprint.gpkg")
-ensTest_df <- read_csv("out/ensemble_oos.csv")
+ensCV_df <- read_csv("out/ensemble_CV.csv")
 
 r_info <- tibble(breaks=seq(-1, 1, by=0.25)) |>
   mutate(break_labs=as.character(round(breaks, 1)),
@@ -759,12 +804,12 @@ mods <- c("IP_predF1", "IP_predF5", "IP_predMix")
 for(i in seq_along(mods)) {
   mod_lab <- as.character(filter(sim_i, grepl(str_sub(mods[i], 4, -1), sim))$lab) |>
     str_remove("Ens\\['") |> str_remove("']")
-  farm_r.df <- ensTest_df |> 
+  farm_r.df <- ensCV_df |> 
     rename_with(~"predColumn", .cols=matches(mods[i])) |>
     group_by(sepaSite) |> 
-    summarise(r=cor(licePerFish_rtrt, predColumn)) |> 
+    summarise(r=cor(licePerFish_rtrt, predColumn, use="pairwise", method="spearman")) |> 
     filter(!is.na(r)) |> 
-    mutate(letter=cut(r, breaks=r_breaks, labels=letters[1:(length(r_breaks)-1)])) |>
+    mutate(letter=cut(r, breaks=r_info$breaks, labels=letters[1:(length(r_info$breaks)-1)])) |>
     left_join(site_i)
   farm_r_count <- farm_r.df |>
     count(letter) |>
@@ -792,7 +837,7 @@ for(i in seq_along(mods)) {
     left_join(farm_r_count) |>
     mutate(prop=paste0(round(n/sum(n)*100), "%"))
   
-  col_lab <- expr(r:~Ens[!!mod_lab])
+  col_lab <- expr(rho~":"~Ens[!!mod_lab])
   p_ls[[i]] <- farm_r.df |> 
     ggplot() + 
     geom_sf(data=mesh_fp, fill="grey90", colour="grey", size=0.1) + 
@@ -800,7 +845,7 @@ for(i in seq_along(mods)) {
                position=position_jitter(width=2e3, height=2e3, seed=2)) +
     geom_polygon(data=farm_r_bar.df, aes(x, y, fill=mdpt, group=mdpt), colour="grey10", linewidth=0.15) +
     geom_text(data=farm_r_count_labs, aes(x, y, label=prop), 
-              size=2.25, hjust=1, vjust=0.5, nudge_x=-1000) +
+              size=2, hjust=1, vjust=0.5, nudge_x=-1000) +
     colorspace::scale_fill_binned_diverging(
       name=col_lab, palette="Blue-Red 3", rev=T, 
       limits=c(-1,1), breaks=r_info$breaks, labels=r_info$break_labs,
@@ -826,92 +871,129 @@ ggarrange(p_ls[[1]], p_ls[[2]], p_ls[[3]], nrow=1, common.legend=F, labels="auto
 
 
 
-ensTest_df |>
-  filter(sepaSite %in% filter(farm_r.df, r < 0)$sepaSite) |>
-  ggplot(aes(IP_predMix, licePerFish_rtrt)) + 
-  geom_point(alpha=0.5) + 
-  facet_wrap(~sepaSite)
-ensTest_df |>
-  ggplot(aes(IP_predMix, licePerFish_rtrt)) + 
-  geom_point(alpha=0.5) + 
-  facet_wrap(~sepaSite, nrow=8, scales="free")
 
 
 
-# maps of R2 --------------------------------------------------------------
 
-# mesh_fp <- st_read("data/WeStCOMS2_meshFootprint.gpkg")
-# 
-# # R2_breaks <- c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 1)
-# R2_breaks <- seq(0, 1, by=0.2)
-# farm_R2.df <- ensTest_df |>
-#   group_by(sepaSite) |> 
-#   summarise(R2=yardstick::rsq_vec(licePerFish_rtrt, IP_predMix),
-#             nObs=mean(nObs)) |> 
-#   filter(!is.na(R2)) |> 
-#   mutate(R2_range=cut(R2, breaks=R2_breaks, labels=letters[1:(length(R2_breaks)-1)])) |>
-#   left_join(site_i)
-# farm_R2_count <- farm_R2.df |>
-#   count(R2_range) |>
-#   mutate(scaled=n/max(n),
-#          R2=(R2_breaks + (lead(R2_breaks)-R2_breaks)/2)[-length(R2_breaks)])
-# low_polygon <- tibble(x=c(81000, 96000, 96000, 81000)+4000,
-#                       y=rep(c(0, 54800/nrow(farm_R2_count)), each=2) + 652000)
-# x_rng <- diff(range(low_polygon$x))
-# y_rng <- diff(range(low_polygon$y))
-# farm_R2_bar.df <- map_dfr(1:nrow(farm_R2_count), 
-#                           ~low_polygon |> 
-#                             mutate(R2=farm_R2_count$R2[.x],
-#                                    x=if_else(x==max(x), 
-#                                              x, 
-#                                              max(x)-x_rng*farm_R2_count$scaled[.x]),
-#                                    y=y + (y_rng*(.x-1)))
-# )
-# farm_R2_count_labs <- farm_R2_bar.df |>
-#   group_by(R2) |>
-#   summarise(x=min(x), y=mean(y)) |>
-#   ungroup() |>
-#   left_join(farm_R2_count) |>
-#   mutate(prop=paste0(round(n/sum(n)*100), "%"))
-# 
-# set.seed(2)
-# p <- farm_R2.df |> 
-#   ggplot() + 
-#   geom_sf(data=mesh_fp, fill="grey90", colour="grey", size=0.1) + 
-#   geom_jitter(aes(easting, northing, fill=R2), shape=21, size=2, width=2e3, height=2e3) +
-#   geom_polygon(data=farm_R2_bar.df, aes(x, y, fill=R2, group=R2), colour="grey10", linewidth=0.15) +
-#   geom_text(data=farm_R2_count_labs, aes(x, y, label=prop), 
-#             size=2.25, hjust=1, vjust=0.5, nudge_x=-1000) +
-#   colorspace::scale_fill_binned_sequential(name=expression(R^2~"(2023)"), palette="Oslo", rev=F,
-#                                            limits=c(0,1), breaks=R2_breaks) +
-#   scale_y_continuous(limits=c(630000, 955000), oob=scales::oob_keep,
-#                      breaks=c(56, 58), labels=paste0(c(56, 58), "\u00B0N")) +
-#   scale_x_continuous(breaks=c(-7, -5), labels=paste0(c(7, 5), "\u00B0W"),
-#                      limits=c(75000, 235000), oob=scales::oob_keep) +
-#   theme(legend.position="inside",
-#         legend.position.inside=c(0.175, 0.207),
-#         legend.background=element_blank(),
-#         legend.key.height=unit(0.394, "cm"),
-#         legend.key.width=unit(0.0, "cm"),
-#         legend.text=element_text(size=6),
-#         legend.title=element_text(size=8, vjust=1, hjust=1),
-#         legend.ticks=element_line(colour="grey10", linewidth=0.25),
-#         legend.ticks.length=unit(0.04, "cm"),
-#         axis.title=element_blank())
-# ggsave("figs/pub/ens_farm-R2_map_02.png", p, width=3, height=5.5, dpi=300)
 
-# 
-# ensTest_df |>
-#   filter(sepaSite %in% filter(farm_R2.df, R2 > 0.5)$sepaSite) |>
-#   ggplot(aes(IP_predMix, licePerFish_rtrt)) + 
-#   geom_point(alpha=0.5) + 
-# #   facet_wrap(~sepaSite)
-# ensTest_df |>
-#   ggplot(aes(IP_predMix, licePerFish_rtrt)) +
-#   geom_point(alpha=0.2, size=0.5) +
-#   geom_line(aes(group=sepaSite),stat="smooth", method="lm", se=F, formula=y~x, 
-#             col="cadetblue", alpha=0.5) +
-#   geom_line(stat="smooth", method="lm", se=F, formula=y~x, col="cadetblue", linewidth=1)
+# IDW map of r ------------------------------------------------------------
+
+library(terra)
+ensCV_df <- read_csv("out/ensemble_CV.csv")
+mesh_fp <- st_read("data/WeStCOMS2_meshFootprint.gpkg")
+mesh_rast <- st_read("data/WeStCOMS2_meshFootprint.gpkg") |>
+  rast(resolution=500)
+
+farm_r.df <- ensCV_df |>
+  group_by(sepaSite) |>
+  summarise(across(starts_with("IP"), ~cor(.x, licePerFish_rtrt, use="pairwise", method="spearman"))) |>
+  inner_join(site_i)
+p_ls <- vector("list", 3)
+mods <- c("IP_predF1", "IP_predF5", "IP_predMix")
+for(i in seq_along(mods)) {
+  mod_lab <- as.character(filter(sim_i, grepl(str_sub(mods[i], 4, -1), sim))$lab) |>
+    str_remove("Ens\\['") |> str_remove("']")
+  if(grepl("Mix", mods[i])) mod_lab <- paste0(mod_lab, "  ")
+  col_lab <- expr(Ens[!!mod_lab])
+  map_interp <- interpIDW(mesh_rast, 
+                          farm_r.df |> 
+                            rename_with(~"predColumn", .cols=matches(mods[i])) |>
+                            select(easting, northing, predColumn) |> 
+                            drop_na() |>
+                            as.matrix(),
+                          radius=1000e3) |>
+    mask(mesh_fp)
+  p_ls[[i]] <- as_tibble(map_interp) |>
+    bind_cols(crds(map_interp)) |>
+    ggplot() + 
+    geom_sf(data=mesh_fp, fill="grey90", colour="grey", size=0.1) + 
+    geom_raster(aes(x, y, fill=lyr.1)) + 
+    annotate("text", x=224000, y=862500, label=eval(rho~":"), size=2.5) +
+    colorspace::scale_fill_continuous_diverging(
+      name=col_lab, palette="Blue-Red 3", rev=T, l1=20, l2=90, p2=2,
+      limits=c(-1,1), breaks=c(-1, 0, 1)) +
+    scale_y_continuous(limits=c(620000, 975000), oob=scales::oob_keep,
+                       breaks=c(56, 58), labels=paste0(c(56, 58), "\u00B0N")) +
+    scale_x_continuous(breaks=c(-7, -5), labels=paste0(c(7, 5), "\u00B0W"),
+                       limits=c(63000, 243000), oob=scales::oob_keep) +
+    theme(legend.position="inside",
+          legend.position.inside=c(0.9, 0.57),
+          legend.text=element_text(size=6),
+          legend.title=element_text(size=7, hjust=0.1),
+          legend.background=element_blank(),
+          legend.key.height=unit(0.3, "cm"),
+          legend.key.width=unit(0.15, "cm"),
+          axis.title=element_blank())
+}
+
+ggarrange(p_ls[[1]], p_ls[[2]], p_ls[[3]], nrow=1, common.legend=F, labels="auto") |> 
+  ggsave("figs/pub/ens_farm-r_map-IDW.png", plot=_ , width=9, height=5.25, dpi=300)
+
+
+
+
+
+
+# 2D vs 3D IDW r ----------------------------------------------------------
+
+library(terra)
+ensCV_df <- read_csv("out/ensemble_CV.csv")
+mesh_fp <- st_read("data/WeStCOMS2_meshFootprint.gpkg")
+mesh_rast <- st_read("data/WeStCOMS2_meshFootprint.gpkg") |>
+  rast(resolution=500)
+
+farm_r.df <- ensCV_df |>
+  group_by(sepaSite) |>
+  summarise(across(starts_with("IP"), ~cor(.x, licePerFish_rtrt, method="spearman"))) |>
+  inner_join(site_i)
+
+interp_3D <- interpIDW(mesh_rast, 
+                        farm_r.df |> 
+                          select(easting, northing, IP_sim_avg3D) |> 
+                          drop_na() |>
+                          as.matrix(),
+                        radius=1000e3) |>
+  mask(mesh_fp)
+interp_2D <- interpIDW(mesh_rast, 
+                       farm_r.df |> 
+                         select(easting, northing, IP_sim_avg2D) |> 
+                         drop_na() |>
+                         as.matrix(),
+                       radius=1000e3) |>
+  mask(mesh_fp)
+interp_comp_df <- full_join(
+  as_tibble(interp_3D) |> bind_cols(crds(interp_3D)) |> rename(r_3D=lyr.1),
+  as_tibble(interp_2D) |> bind_cols(crds(interp_2D)) |> rename(r_2D=lyr.1)
+) |>
+  mutate(d3m2=r_3D-r_2D)
+interp_comp_df |>
+  ggplot() + 
+  geom_sf(data=mesh_fp, fill="grey90", colour="grey", size=0.1) + 
+  geom_raster(aes(x, y, fill=d3m2)) + 
+  annotate("text", x=224000, y=862500, label="r :", size=2.5) +
+  scale_fill_gradient2() +
+  colorspace::scale_fill_continuous_diverging(
+    palette="Blue-Red 3", rev=T, l1=20, l2=90, p2=2,
+    limits=c(-max(abs(interp_comp_df$d3m2)), max(abs(interp_comp_df$d3m2))), 
+    breaks=c(-1, 0, 1)) +
+  scale_y_continuous(limits=c(620000, 975000), oob=scales::oob_keep,
+                     breaks=c(56, 58), labels=paste0(c(56, 58), "\u00B0N")) +
+  scale_x_continuous(breaks=c(-7, -5), labels=paste0(c(7, 5), "\u00B0W"),
+                     limits=c(63000, 243000), oob=scales::oob_keep) +
+  theme(legend.position="inside",
+        legend.position.inside=c(0.9, 0.57),
+        legend.text=element_text(size=6),
+        legend.title=element_text(size=7, hjust=0.1),
+        legend.background=element_blank(),
+        legend.key.height=unit(0.3, "cm"),
+        legend.key.width=unit(0.15, "cm"),
+        axis.title=element_blank())
+
+ggarrange(p_ls[[1]], p_ls[[2]], p_ls[[3]], nrow=1, common.legend=F, labels="auto") |> 
+  ggsave("figs/pub/ens_farm-r_map-IDW.png", plot=_ , width=9, height=5.25, dpi=300)
+
+
+
 
 
 # variability among simulations -------------------------------------------
