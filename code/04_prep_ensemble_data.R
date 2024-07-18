@@ -181,12 +181,8 @@ valid_df <- valid_df |>
          ydaySin=sin(yday(date)/366),
          ydayCosXSin=ydayCos*ydaySin) |>
   # binary treatment by Code of Good Practice
-  mutate(liceThresh=if_else(between(month(date), 2, 6), 0.5, 1), # CoGP
-         liceTreat=factor(licePerFish_rtrt^4 > liceThresh, levels=c(FALSE, TRUE)),
-         liceLow=factor(licePerFish_rtrt^4 < 1),
-         year=year(date),
-         CoGP_period=paste0("CoGP_", liceThresh)) |>
-  select(-liceThresh) |>
+  mutate(lice_g05=licePerFish_rtrt^4 > 0.5,
+         year=year(date)) |>
   arrange(date, sepaSite) |>
   drop_na() |>
   mutate(rowNum=row_number(),
@@ -198,4 +194,3 @@ valid_df <- valid_df |>
   mutate(across(starts_with("sim_"), ~.x - mean(.x), .names="c_{.col}"))
 
 write_csv(valid_df, "out/valid_df.csv")
-
