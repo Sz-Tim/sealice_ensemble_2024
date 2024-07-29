@@ -117,11 +117,11 @@ metrics_global <- full_join(
     mutate(sim=str_remove(sim, "IP_")) |>
     group_by(sim) |>
     summarise(ROC_AUC=roc_auc_vec(value, truth=lice_g05, event_level="second"),
-              PR_AUC=pr_auc_vec(value, truth=lice_g05, event_level="second")) |>
+              PR_AUC=average_precision_vec(value, truth=lice_g05, event_level="second")) |>
     ungroup()
 )
 
-# Mean within-site
+# Mean within site
 metrics_within <- full_join(
   ensCV_df |>
     pivot_longer(starts_with("IP_"), names_to="sim") |>
@@ -148,30 +148,46 @@ metrics_within <- full_join(
     mutate(sim=str_remove(sim, "IP_")) |>
     group_by(sepaSite, sim) |>
     summarise(ROC_AUC=roc_auc_vec(value, truth=lice_g05, event_level="second"),
-              PR_AUC=pr_auc_vec(value, truth=lice_g05, event_level="second")) |>
+              PR_AUC=average_precision_vec(value, truth=lice_g05, event_level="second")) |>
     group_by(sim) |>
     summarise(ROC_AUC=mean(ROC_AUC, na.rm=T),
               PR_AUC=mean(PR_AUC, na.rm=T)) |>
     ungroup()
 )
 
-# Site means
-metrics_among <- ensCV_df |>
-  pivot_longer(starts_with("IP_"), names_to="sim") |>
-  mutate(sim=str_remove(sim, "IP_")) |>
-  group_by(sepaSite, sim) |>
-  summarise(value=mean(value), 
-            licePerFish_rtrt=mean(licePerFish_rtrt),
-            prop_g05=mean(lice_g05=="TRUE"),
-            prop_0=mean(licePerFish_rtrt==0)) |>
-  group_by(sim) |>
-  summarise(rsq=rsq_vec(value, truth=licePerFish_rtrt),
-            r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
-            rmse=rmse_vec(value, truth=licePerFish_rtrt),
-            N=n(),
-            prop_g05=mean(prop_g05),
-            prop_0=mean(prop_0)) |>
-  ungroup()
+# Mean among site
+metrics_among <- full_join(
+  ensCV_df |>
+    pivot_longer(starts_with("IP_"), names_to="sim") |>
+    mutate(sim=str_remove(sim, "IP_")) |>
+    group_by(date, sim) |>
+    summarise(rsq=rsq_vec(value, truth=licePerFish_rtrt),
+              r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
+              rmse=rmse_vec(value, truth=licePerFish_rtrt),
+              N=n(),
+              prop_g05=mean(lice_g05=="TRUE"),
+              prop_0=mean(licePerFish_rtrt==0)) |>
+    group_by(sim) |>
+    summarise(rsq=mean(rsq, na.rm=T),
+              r=mean(r, na.rm=T),
+              rmse=mean(rmse, na.rm=T),
+              N=mean(N, na.rm=T),
+              prop_g05=mean(prop_g05),
+              prop_0=mean(prop_0, na.rm=T)) |>
+    ungroup(),
+  ensCV_df |>
+    select(-starts_with("IP_predF")) |> rename_with(~str_replace(.x, "pr_pred", "IP_pred")) |>
+    pivot_longer(starts_with("IP_"), names_to="sim") |>
+    filter(!is.na(value)) |>
+    mutate(sim=str_remove(sim, "IP_")) |>
+    group_by(date, sim) |>
+    summarise(ROC_AUC=roc_auc_vec(value, truth=lice_g05, event_level="second"),
+              PR_AUC=average_precision_vec(value, truth=lice_g05, event_level="second")) |>
+    group_by(sim) |>
+    summarise(ROC_AUC=mean(ROC_AUC, na.rm=T),
+              PR_AUC=mean(PR_AUC, na.rm=T)) |>
+    ungroup()
+)
 
 all_metrics_df <- bind_rows(
   metrics_global |> mutate(type="global"),
@@ -184,12 +200,14 @@ all_metrics_df <- bind_rows(
                        labels=c("'AUC'['ROC']", "'AUC'['PR']", "R^2", "rho", "RMSE"))) |>
   left_join(sim_i) |>
   arrange(lab) |>
-  mutate(type=factor(type, levels=c("global", "within", "among"))) |>
+  mutate(type=factor(type, 
+                     levels=c("global", "within", "among"),
+                     labels=c("Global", "Mean within farms", "Mean among farms"))) |>
   drop_na()
 
 all_metrics_labs <- all_metrics_df |>
   filter(metric=="RMSE",
-         type=="within",
+         type=="Mean within farms",
          grepl("(Null|Mean|Ens)", lab_short)) |>
   arrange(lab) |>
   mutate(label=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['Mix']", "'3D'", "Null"),
@@ -206,12 +224,13 @@ p_a <- all_metrics_df |>
   ggplot() + 
   geom_point(aes(type, value, colour=lab_short, shape=lab_short, size=lab_short, alpha=lab_short)) + 
   geom_text(data=all_metrics_labs, aes(type, value, label=label, colour=lab_short),
-            hjust=0, nudge_x=0.75, vjust=0.5, size=2.5, parse=T) +
+            hjust=0, nudge_x=0.7, vjust=0.5, size=2.5, parse=T) +
   geom_point(data=all_metrics_labs, position=position_nudge(x=0.55),
              aes(type, value, colour=lab_short, shape=lab_short, size=lab_short), alpha=1) +
   scale_y_continuous("Cross-validation score", breaks=seq(0, 1, by=0.5),
                      minor_breaks=seq(0, 1, by=0.1), limits=c(0, 1), oob=scales::oob_keep) +
-  facet_grid(.~metric, scales="free_x", space="free_x", labeller=label_parsed) + 
+  scale_x_discrete(labels=label_wrap_gen(width=10)) +
+  facet_grid(.~metric, labeller=label_parsed) + 
   scale_colour_manual(values=c("black", "black", "red",
                                scico(2, begin=0.2, end=0.7, palette="broc", direction=-1),
                                scico(2, begin=0.2, end=0.7, palette="broc", direction=-1),
@@ -224,26 +243,46 @@ p_a <- all_metrics_df |>
   theme(panel.grid.major.y=element_line(colour="grey85", linewidth=0.4),
         panel.grid.minor.y=element_line(colour="grey90", linewidth=0.2),
         axis.title.x=element_blank(),
-        axis.text.x=element_text(vjust=0.5),
+        axis.title.y=element_text(size=9),
+        axis.text.x=element_text(vjust=1, size=7),
+        axis.text.y=element_text(size=7),
         legend.position="none")
 
-p_b <- ensCV_df |>
+
+metric_date_df <- ensCV_df |>
   filter(date > "2021-06-01") |>
   group_by(date) |>
-  summarise(r=cor(licePerFish_rtrt, IP_predMix, use="pairwise", method="spearman")) |>
-  ggplot(aes(date, r)) + 
-  geom_point() +  
-  scale_x_date(date_breaks="1 year", date_minor_breaks="3 months", date_labels="%Y") +
-  scale_y_continuous(expression("Ens"["Mix"]~"weekly"~rho), 
+  summarise(r=cor(IP_predMix, licePerFish_rtrt, use="pairwise", method="spearman"),
+            rmse=rmse_vec(IP_predMix, truth=licePerFish_rtrt),
+            ROC_AUC=roc_auc_vec(IP_predMix, truth=lice_g05, event_level="second"),
+            PR_AUC=average_precision_vec(IP_predMix, truth=lice_g05, event_level="second")) |>
+  ungroup() |>
+  pivot_longer(-1, names_to="metric") |>
+  mutate(metric=factor(metric, levels=c("ROC_AUC", "PR_AUC", "rsq", "r", "rmse"),
+                       labels=c("'AUC'['ROC']", "'AUC'['PR']", "R^2", "rho", "RMSE")))
+p_b <- metric_date_df |>
+  ggplot(aes(date, value, colour=metric)) +
+  geom_point(size=0.5, shape=1) + 
+  geom_line(stat="smooth", method="loess", formula=y~x, se=F, span=0.4) +
+  geom_text(data=metric_date_df |> slice_max(date), 
+            aes(date, value, label=metric),
+            hjust=0, nudge_x=20, vjust=0.5, size=2.5, parse=T) +
+  scale_x_date(date_breaks="1 year", date_minor_breaks="3 months", 
+               date_labels="%Y", expand=expansion(mult=c(0.05, 0.1))) +
+  scale_y_continuous(expression("Ens"["Mix"]~"among farm value"), 
                      limits=c(0, 1), breaks=c(0, 0.5, 1)) +
+  scale_colour_manual(values=colorspace::divergingx_hcl("Earth", n=6)[c(1,2,5,6)]) +
   theme_bw() + 
-  theme(axis.title.x=element_blank(),
+  theme(legend.position="none",
+        axis.title.x=element_blank(),
+        axis.title.y=element_text(size=9),
         panel.grid.major.y=element_line(colour="grey85", linewidth=0.4),
-        panel.grid.minor.y=element_line(colour="grey90", linewidth=0.2))
+        panel.grid.minor.y=element_line(colour="grey90", linewidth=0.2),
+        axis.text=element_text(size=7))
 
 cowplot::plot_grid(p_a, p_b, nrow=2, align="hv", axis="lr", 
                    rel_heights=c((1+sqrt(5))/2, 1), labels="auto")
-ggsave("figs/pub/validation_metrics_CV.png", width=6, height=6)
+ggsave("figs/pub/validation_metrics_CV_means.png", width=6, height=6)
 
 
 
