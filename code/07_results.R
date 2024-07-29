@@ -441,9 +441,8 @@ ggsave("figs/pub/predictions_2023_scatterplot.png", width=7, height=5)
 # infection pressure through time -----------------------------------------
 
 set.seed(1003)
-mod <- "3D_ranef"
-out_ensMixRE <- readRDS(glue("out/ensembles/ensMix_{mod}_stanfit.rds"))
-dat_ensMixRE <- readRDS(glue("out/ensembles/ensMix_{mod}_standata.rds"))
+out_ensMixRE <- readRDS(glue("out/ensembles/ensMix_3D_ranef_FULL_stanfit.rds"))
+dat_ensMixRE <- readRDS(glue("out/ensembles/ensMix_3D_ranef_FULL_standata.rds"))
 
 iter_sub <- sample.int(length(rstan::extract(out_ensMixRE, pars="sigma")[[1]]), size=3000)
 b_p_post <- rstan::extract(out_ensMixRE, pars="b_p")[[1]] |>
@@ -508,7 +507,7 @@ fig_influx <- influx_ens |>
   geom_area(colour="grey30", linewidth=0.05, outline.type="both") +
   scale_x_date(date_breaks="1 year", date_minor_breaks="3 months", date_labels="%Y") +
   scale_y_continuous("Proportion of active farms", limits=c(0,1)) +
-  scale_fill_viridis_b(expression(paste("Copepodids" %.% "m"^-2 %.% "h"^-1)),
+  scale_fill_viridis_b(expression(paste("Copepodids" %.% "m"^"-2" %.% "h"^"-1")),
                        option="turbo", begin=0.05,
                        breaks=c(2.5, 3.5, 4.5, 5.5, 6.5),
                        labels=c("0.0001", "0.001", "0.01", "0.1", "1")) +
@@ -545,7 +544,7 @@ influx_ens |>
   mutate(year=year(week),
          week_std=ymd(paste(2023, month(week), day(week), sep="-"))) |>
   ggplot(aes(week, lice_mn^0.25, group=week)) + 
-  stat_slabinterval() +
+  stat_slabinterval(normalize="groups") +
   theme_bw() 
 
 
@@ -558,8 +557,8 @@ influx_ens |>
 # ensemble density calculations -------------------------------------------
 
 mod <- "ranef"
-out_ensMixRE <- readRDS(glue("out/ensembles/ensMix_3D_{mod}_stanfit.rds"))
-dat_ensMixRE <- readRDS(glue("out/ensembles/ensMix_3D_{mod}_standata.rds"))
+out_ensMixRE <- readRDS(glue("out/ensembles/ensMix_3D_ranef_FULL_stanfit.rds"))
+dat_ensMixRE <- readRDS(glue("out/ensembles/ensMix_3D_ranef_FULL_standata.rds"))
 
 iter_sub <- sample.int(length(rstan::extract(out_ensMixRE, pars="sigma")[[1]]), size=3000)
 b_p_post <- rstan::extract(out_ensMixRE, pars="b_p")[[1]]
