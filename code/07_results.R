@@ -328,7 +328,7 @@ p_b <- swim_post |> mutate(var="Vertical swim speed") |> rename(name=swimSpeed) 
   stat_pointinterval(.width=c(0.5, 0.8, 0.95), shape=1, colour="dodgerblue4") +
   scale_slab_alpha_continuous(range=c(0.01, 0.8)) +
   xlim(0, 1) +
-  labs(x=expression(paste("Total mixing weight (", italic(pi[~~k]), ")"))) +
+  labs(x=expression(paste("Total mixing weight (", italic(Sigma~~pi[~~k]), ")"))) +
   facet_grid(var~., scales="free_y", switch="y") +
   scale_y_discrete(position="right") +
   theme(legend.position="none",
@@ -343,11 +343,11 @@ ggsave("figs/pub/ens_mix_p.png", p_full, width=7, height=6)
 
 # Posterior summaries
 bind_rows(
-  swim_post |> mutate(var="swimSpeed") |> rename(name=swimSpeed) |> 
-    group_by(var, name) |> sevcheck::get_intervals(p),
   eggTemp_post |> mutate(var="eggTemp") |> rename(name=eggTemp) |> 
     group_by(var, name) |> sevcheck::get_intervals(p),
   salMort_post |> mutate(var="salinityMort") |> rename(name=salinityMort) |> 
+    group_by(var, name) |> sevcheck::get_intervals(p),
+  swim_post |> mutate(var="swimSpeed") |> rename(name=swimSpeed) |> 
     group_by(var, name) |> sevcheck::get_intervals(p),
   vertDiff_post |> mutate(var="variableDhV") |> rename(name=variableDhV) |> 
     group_by(var, name) |> sevcheck::get_intervals(p)
@@ -355,52 +355,20 @@ bind_rows(
 
 
 # Comparisons
-swim_post |> group_by(iter) |> 
-  summarise(dConst_f=first(p)-last(p)) |> 
-  ungroup() |> 
-  summarise(pG0=mean(dConst_f>0),
-            mnDiff=mean(dConst_f),
-            CI_025=quantile(dConst_f, probs=0.025),
-            CI_05=quantile(dConst_f, probs=0.05),
-            CI_10=quantile(dConst_f, probs=0.1),
-            CI_90=quantile(dConst_f, probs=0.9),
-            CI_95=quantile(dConst_f, probs=0.95),
-            CI_975=quantile(dConst_f, probs=0.975))
-eggTemp_post |> group_by(iter) |> 
-  summarise(dConst_f=first(p)-last(p)) |> 
-  ungroup() |> 
-  summarise(pG0=mean(dConst_f>0),
-            mnDiff=mean(dConst_f),
-            CI_025=quantile(dConst_f, probs=0.025),
-            CI_05=quantile(dConst_f, probs=0.05),
-            CI_10=quantile(dConst_f, probs=0.1),
-            CI_90=quantile(dConst_f, probs=0.9),
-            CI_95=quantile(dConst_f, probs=0.95),
-            CI_975=quantile(dConst_f, probs=0.975))
-salMort_post |> group_by(iter) |> 
-  summarise(dConst_f=first(p)-last(p)) |> 
-  ungroup() |> 
-  summarise(pG0=mean(dConst_f>0),
-            mnDiff=mean(dConst_f),
-            CI_025=quantile(dConst_f, probs=0.025),
-            CI_05=quantile(dConst_f, probs=0.05),
-            CI_10=quantile(dConst_f, probs=0.1),
-            CI_90=quantile(dConst_f, probs=0.9),
-            CI_95=quantile(dConst_f, probs=0.95),
-            CI_975=quantile(dConst_f, probs=0.975))
-vertDiff_post |> group_by(iter) |> 
-  summarise(dConst_f=first(p)-last(p)) |> 
-  ungroup() |> 
-  summarise(pG0=mean(dConst_f>0),
-            mnDiff=mean(dConst_f),
-            CI_025=quantile(dConst_f, probs=0.025),
-            CI_05=quantile(dConst_f, probs=0.05),
-            CI_10=quantile(dConst_f, probs=0.1),
-            CI_90=quantile(dConst_f, probs=0.9),
-            CI_95=quantile(dConst_f, probs=0.95),
-            CI_975=quantile(dConst_f, probs=0.975))
-
-
+bind_rows(
+  eggTemp_post |> mutate(var="eggTemp") |> 
+    group_by(var, iter) |> summarise(d=first(p)-last(p)) |>
+    group_by(var) |> sevcheck::get_intervals(d),
+  salMort_post |> mutate(var="salinityMort") |>
+    group_by(var, iter) |> summarise(d=first(p)-last(p)) |>
+    group_by(var) |> sevcheck::get_intervals(d),
+  swim_post |> mutate(var="swimSpeed") |>
+    group_by(var, iter) |> summarise(d=first(p)-last(p)) |>
+    group_by(var) |> sevcheck::get_intervals(d),
+  vertDiff_post |> mutate(var="variableDhV") |> 
+    group_by(var, iter) |> summarise(d=first(p)-last(p)) |>
+    group_by(var) |> sevcheck::get_intervals(d)
+)
 
 # scatterplots ------------------------------------------------------------
 
