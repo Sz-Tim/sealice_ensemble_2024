@@ -180,8 +180,8 @@ for(i in seq_along(advance)) {
       "tune_race_anova", 
       resamples=folds, 
       grid=gridSize,
-      metrics=metric_set(rmse, ccc, rsq),
-      control=control_race(save_pred=T, # 2:07s
+      metrics=metric_set(rmse),
+      control=control_race(save_pred=T, 
                            save_workflow=T,
                            parallel_over="everything",
                            verbose=F,
@@ -242,8 +242,8 @@ for(i in seq_along(advance)) {
       "tune_race_anova",
       resamples=folds,
       grid=gridSize,
-      metrics=metric_set(roc_auc, pr_auc),
-      control=control_race(save_pred=T, # 2:07s
+      metrics=metric_set(roc_auc),
+      control=control_race(save_pred=T, 
                            save_workflow=T,
                            parallel_over="everything",
                            verbose=F,
@@ -286,7 +286,7 @@ for(i in seq_along(advance)) {
     saveRDS(liceBinary_best_wf, glue("out/ensembles/liceBinary_best_wf_{advance[i]}wk_{m}.rds"))
     saveRDS(liceBinary_best_results, glue("out/ensembles/liceBinary_best_results_{advance[i]}wk_{m}.rds"))
     saveRDS(liceBinary_final_fit, glue("out/ensembles/liceBinary_best_fitted_{advance[i]}wk_{m}.rds"))
-    write_csv(licePerFish_best_preds, glue("out/ensembles/CV_ensFc-{advance[i]}_{m}.csv"))
+    write_csv(liceBinary_best_preds, glue("out/ensembles/CV_ensFc-{advance[i]}_{m}.csv"))
   }
   
   gc()
