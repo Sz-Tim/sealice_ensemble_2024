@@ -755,42 +755,63 @@ ggsave("figs/pub/fig_overview_example_map.png", width=5.5, height=3)
 
 ensCV_df <- read_csv("out/ensemble_CV.csv")
 
-farm_r.df <- ensCV_df |>
-  group_by(sepaSite) |>
-  summarise(across(starts_with("IP"), ~cor(.x, licePerFish_rtrt, use="pairwise", method="spearman")),
-            N=n()) |>
-  # filter(N > 10) |>
-  inner_join(site_i) |>
-  select(sepaSite, IP_null, contains("avg"), contains("pred")) |>
-  pivot_longer(starts_with("IP"), names_to="sim") |>
-  mutate(sim=str_remove(sim, "IP_")) |>
+farm_r.df <- metrics_by_farm |>
+  filter(N > 10) |>
+  filter(grepl("null|avg|pred", sim)) |>
   left_join(sim_i) |>
-  droplevels()
-farm_r.df |> 
-  group_by(lab) |>
-  summarise(mn=mean(value), se=sd(value)/sqrt(n())) |>
-  ggplot(aes(mn, lab, xmin=mn-2*se, xmax=mn+2*se)) +
-  geom_pointrange() + 
-  scale_fill_scico_d(palette="glasgow", guide="none") +
-  scale_colour_scico_d(palette="glasgow", guide="none") +
-  scale_y_discrete(breaks=levels(farm_r.df$lab), labels=parse(text=levels(farm_r.df$lab))) +
-  scale_x_continuous(eval("Farm-level Spearman's"~rho), limits=c(-1, 1)) +
-  theme(panel.grid.major=element_line(colour="grey90", linewidth=0.2),
-        axis.title.y=element_blank())
-farm_r.df |>
+  droplevels() |>
+  select(sepaSite, sim, r, rmse, ROC_AUC, PR_AUC, lab, lab_short) |>
+  pivot_longer(all_of(c("r", "rmse", "ROC_AUC", "PR_AUC")), names_to="metric") |>
+  mutate(type="By farm") |>
+  mutate(metric=factor(metric, levels=c("ROC_AUC", "PR_AUC", "rsq", "r", "rmse"),
+                     labels=c("'AUC'['ROC']", "'AUC'['PR']", "R^2", "rho", "RMSE"))) |>
+  arrange(lab) |>
+  mutate(type=factor(type, 
+                     levels=c("global", "By farm", "By week"),
+                     labels=c("Global", "'By farm'", "'By week'"))) |>
+  filter(!is.na(value))
+week_r.df <- metrics_by_week |>
+  filter(N > 10) |>
+  filter(grepl("null|avg|pred", sim)) |>
+  left_join(sim_i) |>
+  droplevels() |>
+  select(date, sim, r, rmse, ROC_AUC, PR_AUC, lab, lab_short) |>
+  pivot_longer(all_of(c("r", "rmse", "ROC_AUC", "PR_AUC")), names_to="metric") |>
+  filter(!(sim=="null" & metric=="ROC_AUC")) |>
+  mutate(type="By week") |>
+  mutate(metric=factor(metric, levels=c("ROC_AUC", "PR_AUC", "rsq", "r", "rmse"),
+                       labels=c("'AUC'['ROC']", "'AUC'['PR']", "R^2", "rho", "RMSE"))) |>
+  arrange(lab) |>
+  mutate(type=factor(type, 
+                     levels=c("global", "By farm", "By week"),
+                     labels=c("Global", "'By farm'", "'By week'"))) |>
+  filter(!is.na(value))
+dummy_lims <- expand_grid(sim="null", 
+                          lab="Null", 
+                          lab_short="Null",
+                          metric=unique(farm_r.df$metric),
+                          lim=c("min", "max")) |>
+  mutate(value=c(-1, 1, 0, 0.9, 0.4, 1, 0, 1))
+# Maps among weeks are much more stable, generally better
+# More variability among farms in predicting time series
+p <- bind_rows(farm_r.df, week_r.df) |>
   ggplot(aes(value, lab, fill=lab_short, colour=lab_short)) + 
+  geom_point(data=dummy_lims, colour="white", size=0.05, position=position_nudge(y=0.2)) +
   geom_dots(side="bottom", scale=0.5) + 
-  stat_slab(normalize="xy", scale=0.5, colour=NA, 
+  stat_slab(normalize="xy", scale=0.5, colour=NA, fill_type="gradient",
             aes(slab_alpha=after_stat(-pmax(abs(1-2*cdf), 0.5)))) +
-  stat_pointinterval(.width=c(0.5, 0.8, 0.95), colour="black") +
+  stat_pointinterval(.width=c(0.5, 0.95), colour="black") +
   scale_slab_alpha_continuous(range=c(0.1, 0.5), guide="none") +
   scale_fill_scico_d(palette="glasgow", guide="none", end=0.8) +
   scale_colour_scico_d(palette="glasgow", guide="none", end=0.8) +
   scale_y_discrete(breaks=levels(farm_r.df$lab), labels=parse(text=levels(farm_r.df$lab))) +
-  scale_x_continuous(eval("Farm-level Spearman's"~rho), limits=c(-1, 1)) +
+  facet_grid(type~metric, scales="free_x", labeller="label_parsed") +
   theme(panel.grid.major=element_line(colour="grey90", linewidth=0.2),
-        axis.title.y=element_blank())
-  
+        axis.title.y=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text=element_text(size=7))
+ggsave("figs/pub/metric_stormclouds.png", p, width=10, height=5, dpi=300)
+
 
 
 
@@ -878,11 +899,8 @@ ggarrange(p_ls[[1]], p_ls[[2]], p_ls[[3]], nrow=1, common.legend=F, labels="auto
 
 
 
+# maps of r + IDW ---------------------------------------------------------
 
-
-
-
-# IDW map of r ------------------------------------------------------------
 
 library(terra)
 ensCV_df <- read_csv("out/ensemble_CV.csv")
@@ -890,16 +908,23 @@ mesh_fp <- st_read("data/WeStCOMS2_meshFootprint.gpkg")
 mesh_rast <- st_read("data/WeStCOMS2_meshFootprint.gpkg") |>
   rast(resolution=500)
 
+r_info <- tibble(breaks=seq(-1, 1, by=0.25)) |>
+  mutate(break_labs=as.character(round(breaks, 1)),
+         break_labs=if_else(row_number() %% 2 == 0, "", break_labs),
+         letter=letters[row_number()],
+         mdpt=(breaks + (lead(breaks)-breaks)/2)) 
 farm_r.df <- ensCV_df |>
   group_by(sepaSite) |>
-  summarise(across(starts_with("IP"), ~cor(.x, licePerFish_rtrt, use="pairwise", method="spearman"))) |>
+  summarise(across(starts_with("IP"), 
+                   ~cor(.x, licePerFish_rtrt, use="pairwise", method="spearman"))) |>
   inner_join(site_i)
+
 p_ls <- vector("list", 3)
 mods <- c("IP_predF1", "IP_predF5", "IP_predMix")
 for(i in seq_along(mods)) {
   mod_lab <- as.character(filter(sim_i, grepl(str_sub(mods[i], 4, -1), sim))$lab) |>
     str_remove("Ens\\['") |> str_remove("']")
-  if(grepl("Mix", mods[i])) mod_lab <- paste0(mod_lab, "  ")
+  # if(grepl("Mix", mods[i])) mod_lab <- paste0(mod_lab, "  ")
   col_lab <- expr(Ens[!!mod_lab])
   map_interp <- interpIDW(mesh_rast, 
                           farm_r.df |> 
@@ -909,31 +934,118 @@ for(i in seq_along(mods)) {
                             as.matrix(),
                           radius=1000e3) |>
     mask(mesh_fp)
+  farm_r.df_i <- farm_r.df |> 
+    rename_with(~"predColumn", .cols=matches(mods[i])) |>
+    filter(!is.na(predColumn)) |> 
+    select(sepaSite, predColumn, easting, northing) |>
+    mutate(letter=cut(predColumn, 
+                      breaks=r_info$breaks, 
+                      labels=letters[1:(length(r_info$breaks)-1)]))
+  farm_r_count <- farm_r.df_i |>
+    count(letter) |>
+    mutate(scaled=n/max(n)) |>
+    full_join(r_info |> select(letter, mdpt) |> drop_na()) |>
+    mutate(n=replace_na(n, 0),
+           scaled=replace_na(scaled, 0)) |>
+    arrange(letter)
+  low_polygon <- tibble(x=c(81000, 96000, 96000, 81000)+4000,
+                        y=rep(c(0, 54800/nrow(farm_r_count)), each=2) + 652000)
+  x_rng <- diff(range(low_polygon$x))
+  y_rng <- diff(range(low_polygon$y))
+  farm_r_bar.df <- map_dfr(1:nrow(farm_r_count), 
+                           ~low_polygon |> 
+                             mutate(mdpt=farm_r_count$mdpt[.x],
+                                    x=if_else(x==max(x), 
+                                              x, 
+                                              max(x)-x_rng*farm_r_count$scaled[.x]),
+                                    y=y + (y_rng*(.x-1)))
+  )
+  farm_r_count_labs <- farm_r_bar.df |>
+    group_by(mdpt) |>
+    summarise(x=min(x), y=mean(y)) |>
+    ungroup() |>
+    left_join(farm_r_count) |>
+    mutate(prop=paste0(round(n/sum(n)*100), "%"))
+  
+  col_lab <- expr(rho~":"~Ens[!!mod_lab])
+  
   p_ls[[i]] <- as_tibble(map_interp) |>
     bind_cols(crds(map_interp)) |>
     ggplot() + 
     geom_sf(data=mesh_fp, fill="grey90", colour="grey", size=0.1) + 
     geom_raster(aes(x, y, fill=lyr.1)) + 
-    annotate("text", x=224000, y=862500, label=eval(rho~":"), size=2.5) +
     colorspace::scale_fill_continuous_diverging(
       name=col_lab, palette="Blue-Red 3", rev=T, l1=20, l2=90, p2=2,
-      limits=c(-1,1), breaks=c(-1, 0, 1)) +
-    scale_y_continuous(limits=c(620000, 975000), oob=scales::oob_keep,
+      limits=c(-1,1), breaks=c(-1, 0, 1), guide="none") +
+    new_scale_fill() +
+    geom_point(data=farm_r.df_i, aes(easting, northing, fill=predColumn), 
+               shape=21, size=1, stroke=0.25, colour="grey10") +
+    geom_polygon(data=farm_r_bar.df, aes(x, y, fill=mdpt, group=mdpt),
+                 colour="grey10", linewidth=0.15) +
+    geom_text(data=farm_r_count_labs, aes(x, y, label=prop), 
+              size=2, hjust=1, vjust=0.5, nudge_x=-1000) +
+    colorspace::scale_fill_binned_diverging(
+      name=col_lab, palette="Blue-Red 3", rev=T, 
+      limits=c(-1,1), breaks=r_info$breaks, labels=r_info$break_labs,
+      l1=20, l2=90, p2=2) +
+    scale_y_continuous(limits=c(630000, 955000), oob=scales::oob_keep,
                        breaks=c(56, 58), labels=paste0(c(56, 58), "\u00B0N")) +
     scale_x_continuous(breaks=c(-7, -5), labels=paste0(c(7, 5), "\u00B0W"),
-                       limits=c(63000, 243000), oob=scales::oob_keep) +
+                       limits=c(75000, 235000), oob=scales::oob_keep) +
     theme(legend.position="inside",
-          legend.position.inside=c(0.9, 0.57),
-          legend.text=element_text(size=6),
-          legend.title=element_text(size=7, hjust=0.1),
+          legend.position.inside=c(ifelse(i==3, 0.195, 0.185), 0.203),
           legend.background=element_blank(),
-          legend.key.height=unit(0.3, "cm"),
-          legend.key.width=unit(0.15, "cm"),
-          axis.title=element_blank())
+          legend.key.height=unit(0.395, "cm"),
+          legend.key.width=unit(0.0, "cm"),
+          legend.text=element_text(size=6),
+          legend.title=element_text(size=8, vjust=1, hjust=1),
+          legend.ticks=element_line(colour="grey10", linewidth=0.25),
+          legend.ticks.length=unit(0.04, "cm"),
+          axis.title=element_blank()) 
 }
 
 ggarrange(p_ls[[1]], p_ls[[2]], p_ls[[3]], nrow=1, common.legend=F, labels="auto") |> 
-  ggsave("figs/pub/ens_farm-r_map-IDW.png", plot=_ , width=9, height=5.25, dpi=300)
+  ggsave("figs/pub/ens_farm-r+IDW_map.png", plot=_ , width=9, height=5.5, dpi=300)
+
+
+
+
+
+
+
+
+
+
+# date performance --------------------------------------------------------
+
+mods <- c("predF1", "predF5", "predMix")
+
+metric_date_df <- metrics_by_week |>
+  filter(date > "2021-06-01") |>
+  filter(sim %in% mods) |>
+  pivot_longer(all_of(c("ROC_AUC", "PR_AUC", "r", "rmse")), names_to="metric") |>
+  mutate(metric=factor(metric, levels=c("ROC_AUC", "PR_AUC", "rsq", "r", "rmse"),
+                       labels=c("'AUC'['ROC']", "'AUC'['PR']", "R^2", "rho", "RMSE")))
+metric_date_df |>
+  ggplot(aes(date, value, colour=sim)) +
+  geom_point(size=0.5, shape=1) + 
+  geom_line(stat="smooth", method="loess", formula=y~x, se=F, span=0.2) +
+  geom_text(data=metric_date_df |> slice_max(date), 
+            aes(date, value, label=sim),
+            hjust=0, nudge_x=20, vjust=0.5, size=2.5, parse=T) +
+  scale_x_date(date_breaks="1 year", date_minor_breaks="3 months", 
+               date_labels="%Y", expand=expansion(mult=c(0.05, 0.1))) +
+  scale_y_continuous("Among farm value") +
+  # scale_colour_manual(values=colorspace::divergingx_hcl("Earth", n=6)[c(1,2,5,6)]) +
+  theme_bw() + 
+  facet_wrap(~metric, ncol=1, strip.position="right", scales="free_y", labeller=label_parsed) +
+  theme(legend.position="none",
+        axis.title.x=element_blank(),
+        axis.title.y=element_text(size=9),
+        panel.grid.major.y=element_line(colour="grey85", linewidth=0.4),
+        panel.grid.minor.y=element_line(colour="grey90", linewidth=0.2),
+        axis.text=element_text(size=7))
+
 
 
 
