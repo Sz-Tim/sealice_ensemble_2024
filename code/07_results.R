@@ -17,6 +17,7 @@ library(ggpubr)
 library(cowplot)
 library(scico)
 library(ggdist)
+library(ggnewscale)
 theme_set(theme_bw() + theme(panel.grid=element_blank()))
 source("code/00_fn.R")
 
@@ -103,8 +104,7 @@ metrics_global <- full_join(
     pivot_longer(starts_with("IP_"), names_to="sim") |>
     mutate(sim=str_remove(sim, "IP_")) |>
     group_by(sim) |>
-    summarise(rsq=rsq_vec(value, truth=licePerFish_rtrt),
-              r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
+    summarise(r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
               rmse=rmse_vec(value, truth=licePerFish_rtrt),
               N=n(),
               prop_g05=mean(lice_g05=="TRUE"),
@@ -122,24 +122,16 @@ metrics_global <- full_join(
 )
 
 # Mean within site
-metrics_within <- full_join(
+metrics_by_farm <- full_join(
   ensCV_df |>
     pivot_longer(starts_with("IP_"), names_to="sim") |>
     mutate(sim=str_remove(sim, "IP_")) |>
     group_by(sepaSite, sim) |>
-    summarise(rsq=rsq_vec(value, truth=licePerFish_rtrt),
-              r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
+    summarise(r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
               rmse=rmse_vec(value, truth=licePerFish_rtrt),
               N=n(),
               prop_g05=mean(lice_g05=="TRUE"),
               prop_0=mean(licePerFish_rtrt==0)) |>
-    group_by(sim) |>
-    summarise(rsq=mean(rsq, na.rm=T),
-              r=mean(r, na.rm=T),
-              rmse=mean(rmse, na.rm=T),
-              N=mean(N, na.rm=T),
-              prop_g05=mean(prop_g05),
-              prop_0=mean(prop_0, na.rm=T)) |>
     ungroup(),
   ensCV_df |>
     select(-starts_with("IP_predF")) |> rename_with(~str_replace(.x, "pr_pred", "IP_pred")) |>
@@ -149,31 +141,20 @@ metrics_within <- full_join(
     group_by(sepaSite, sim) |>
     summarise(ROC_AUC=roc_auc_vec(value, truth=lice_g05, event_level="second"),
               PR_AUC=average_precision_vec(value, truth=lice_g05, event_level="second")) |>
-    group_by(sim) |>
-    summarise(ROC_AUC=mean(ROC_AUC, na.rm=T),
-              PR_AUC=mean(PR_AUC, na.rm=T)) |>
     ungroup()
 )
 
 # Mean among site
-metrics_among <- full_join(
+metrics_by_week <- full_join(
   ensCV_df |>
     pivot_longer(starts_with("IP_"), names_to="sim") |>
     mutate(sim=str_remove(sim, "IP_")) |>
     group_by(date, sim) |>
-    summarise(rsq=rsq_vec(value, truth=licePerFish_rtrt),
-              r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
+    summarise(r=cor(value, licePerFish_rtrt, use="pairwise", method="spearman"),
               rmse=rmse_vec(value, truth=licePerFish_rtrt),
               N=n(),
               prop_g05=mean(lice_g05=="TRUE"),
               prop_0=mean(licePerFish_rtrt==0)) |>
-    group_by(sim) |>
-    summarise(rsq=mean(rsq, na.rm=T),
-              r=mean(r, na.rm=T),
-              rmse=mean(rmse, na.rm=T),
-              N=mean(N, na.rm=T),
-              prop_g05=mean(prop_g05),
-              prop_0=mean(prop_0, na.rm=T)) |>
     ungroup(),
   ensCV_df |>
     select(-starts_with("IP_predF")) |> rename_with(~str_replace(.x, "pr_pred", "IP_pred")) |>
@@ -183,11 +164,30 @@ metrics_among <- full_join(
     group_by(date, sim) |>
     summarise(ROC_AUC=roc_auc_vec(value, truth=lice_g05, event_level="second"),
               PR_AUC=average_precision_vec(value, truth=lice_g05, event_level="second")) |>
-    group_by(sim) |>
-    summarise(ROC_AUC=mean(ROC_AUC, na.rm=T),
-              PR_AUC=mean(PR_AUC, na.rm=T)) |>
     ungroup()
 )
+
+
+metrics_within <- metrics_by_farm |>
+  group_by(sim) |>
+  summarise(r=mean(r, na.rm=T),
+            rmse=mean(rmse, na.rm=T),
+            ROC_AUC=mean(ROC_AUC, na.rm=T),
+            PR_AUC=mean(PR_AUC, na.rm=T),
+            N=mean(N, na.rm=T),
+            prop_g05=mean(prop_g05),
+            prop_0=mean(prop_0, na.rm=T)) |>
+  ungroup()
+metrics_among <- metrics_by_week |>
+  group_by(sim) |>
+  summarise(r=mean(r, na.rm=T),
+            rmse=mean(rmse, na.rm=T),
+            ROC_AUC=mean(ROC_AUC, na.rm=T),
+            PR_AUC=mean(PR_AUC, na.rm=T),
+            N=mean(N, na.rm=T),
+            prop_g05=mean(prop_g05),
+            prop_0=mean(prop_0, na.rm=T)) |>
+  ungroup()
 
 all_metrics_df <- bind_rows(
   metrics_global |> mutate(type="global"),
@@ -202,12 +202,12 @@ all_metrics_df <- bind_rows(
   arrange(lab) |>
   mutate(type=factor(type, 
                      levels=c("global", "within", "among"),
-                     labels=c("Global", "Mean within farms", "Mean among farms"))) |>
+                     labels=c("Global", "Mean by farm", "Mean by week"))) |>
   drop_na()
 
 all_metrics_labs <- all_metrics_df |>
   filter(metric=="RMSE",
-         type=="Mean within farms",
+         type=="Mean by farm",
          grepl("(Null|Mean|Ens)", lab_short)) |>
   arrange(lab) |>
   mutate(label=c("Ens['Fc-1']", "Ens['Fc-5']", "Ens['Mix']", "'3D'", "Null"),
@@ -269,7 +269,7 @@ p_b <- metric_date_df |>
             hjust=0, nudge_x=20, vjust=0.5, size=2.5, parse=T) +
   scale_x_date(date_breaks="1 year", date_minor_breaks="3 months", 
                date_labels="%Y", expand=expansion(mult=c(0.05, 0.1))) +
-  scale_y_continuous(expression("Ens"["Mix"]~"among farm value"), 
+  scale_y_continuous(expression("Ens"["Mix"]~"value by week"), 
                      limits=c(0, 1), breaks=c(0, 0.5, 1)) +
   scale_colour_manual(values=colorspace::divergingx_hcl("Earth", n=6)[c(1,2,5,6)]) +
   theme_bw() + 
