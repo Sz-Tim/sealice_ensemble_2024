@@ -40,10 +40,15 @@ dirs <- switch(
 )
 sim.i <- bind_rows(
   expand_grid(fixDepth="false",
-              variableDhV=c("false", "true"),
+              salinityThresh=c("high", "low"),
               salinityMort=c("false", "true"),
               eggTemp=c(F, T),
-              swimSpeed=c(1e-4, 1e-3))
+              swimSpeed=c(1e-4, 1e-3)),
+  expand_grid(fixDepth="true",
+              salinityThresh="high",
+              salinityMort=c("false", "true"),
+              eggTemp=c(F, T),
+              swimSpeed=1e-4)
 ) |>
   mutate(i=str_pad(row_number(), 2, "left", "0"),
          outDir=glue("{dirs$out}/sim_{i}/")) 
@@ -73,7 +78,9 @@ walk(sim_seq,
        checkOpenBoundaries="true",
        openBoundaryThresh=2000,
        fixDepth=sim.i$fixDepth[.x],
-       variableDhV=sim.i$variableDhV[.x],
+       variableDhV="false",
+       salinityThreshMin=if_else(sim.i$salinityThresh[.x]=="high", 23, 20),
+       salinityThreshMax=if_else(sim.i$salinityThresh[.x]=="high", 31, 23),
        salinityMort=sim.i$salinityMort[.x],
        eggTemp_b0=if_else(sim.i$eggTemp[.x], 0.17, 28.2),
        eggTemp_b1=if_else(sim.i$eggTemp[.x], 4.28, 0),
