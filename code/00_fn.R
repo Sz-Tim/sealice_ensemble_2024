@@ -4,6 +4,12 @@
 
 
 
+#' Clean lice data from MSS
+#'
+#' @param f_xlsx path to .xlsx with a sheet for each year (2017-2020)
+#'
+#' @return compiled dataframe
+#' @export
 clean_mss_lice_xlsx <- function(f_xlsx) {
   library(readxl)
   list(
@@ -60,7 +66,7 @@ clean_mss_lice_xlsx <- function(f_xlsx) {
 
 
 
-make_data_rstan <- function(df, R2D2_sd=TRUE) {
+make_data_rstan <- function(df, R2D2_sd=FALSE) {
   library(tidyverse)
   zeros <- df$licePerFish_rtrt==0
   sim_names <- grep("^sim_", names(df), value=T)
@@ -89,6 +95,50 @@ make_data_rstan <- function(df, R2D2_sd=TRUE) {
   return(dat_rstan)
 }
 
+
+
+#' Create list of data for rstan 
+#'
+#' @param df Dataframe that includes columns for easting/northing/interaction 
+#' splines, as created by recipes::step-bs()
+#'
+#' @return List of data
+#' @export
+make_data_rstan_sLonLat <- function(df) {
+  library(tidyverse)
+  zeros <- df$licePerFish_rtrt==0
+  sim_names <- grep("^sim_", names(df), value=T)
+  dat_rstan <- list(N=nrow(df),
+                    Y=df$licePerFish_rtrt,
+                    N_Ye0=sum(zeros),
+                    indexes_Ye0=which(zeros),
+                    N_Yg0=sum(!zeros),
+                    indexes_Yg0=which(!zeros),
+                    K_sims=length(sim_names),
+                    X=as.matrix(df |> select(any_of(sim_names))),
+                    Xc=as.matrix(df |> select(any_of(paste0("c_", sim_names)))),
+                    N_groups=n_distinct(df$sepaSiteNum),
+                    J_group=as.numeric(as.factor(df$sepaSiteNum)),
+                    K_knots=sum(grepl("easting_bs_", names(df))),
+                    Xs_easting=df |> 
+                      slice_head(n=1, by=sepaSiteNum) |>
+                      select(starts_with("easting_bs_")) |>
+                      as.matrix(), 
+                    Xs_northing=df |> 
+                      slice_head(n=1, by=sepaSiteNum) |>
+                      select(starts_with("northing_bs_")) |>
+                      as.matrix(), 
+                    Xs_easting_x_northing=df |> 
+                      slice_head(n=1, by=sepaSiteNum) |>
+                      select(starts_with("easting_x_northing_bs_")) |>
+                      as.matrix(), 
+                    sim_names=sim_names,
+                    R2D2_mean_R2_hu=0.5,
+                    R2D2_prec_R2_hu=2,
+                    R2D2_cons_D2_hu=rep(0.5, length(sim_names)),
+                    prior_only=0)
+  return(dat_rstan)
+}
 
 
 
@@ -140,6 +190,69 @@ make_predictions_ensMix <- function(out, newdata, iter=2000, seed=NULL, mode="ep
   }
   return(preds)
 }
+
+
+
+make_predictions_ensMix_sLonLat <- function(out, newdata, iter=2000, seed=NULL, mode="point_epred") {
+  library(tidyverse); library(rstan)
+  # hurdle component is fitted with centered IP
+  
+  set.seed(ifelse(is.null(seed), runif(1), seed))
+  b_b0 <- rstan::extract(out, pars="b_b0")[[1]]
+  b_IP <- rstan::extract(out, pars="b_IP")[[1]]
+  b_s_easting <- rstan::extract(out, pars="b_s_easting")[[1]]
+  b_s_northing <- rstan::extract(out, pars="b_s_northing")[[1]]
+  b_s_easting_x_northing <- rstan::extract(out, pars="b_s_easting_x_northing")[[1]]
+  Intercept_hu <- rstan::extract(out, pars="Intercept_hu")[[1]]
+  b_hu <- rstan::extract(out, pars="b_hu")[[1]]
+  sigma <- rstan::extract(out, pars="sigma")[[1]]
+  
+  iters <- sample.int(nrow(b_b0), iter, replace=T)
+  preds <- matrix(0, nrow=iter, ncol=nrow(newdata))
+  dat_ls <- make_data_rstan_sLonLat(newdata)
+  ensIP <- matrix(0, nrow=iter, ncol=nrow(newdata))
+  hu_RE <- matrix(0, nrow=iter, ncol=nrow(newdata))
+  
+  # b_p_uc <- b_p <- array(dim=list(nrow(newdata), iter, dim(b_hu)[2]))
+  b_p_uc <- b_p <- array(dim=list(dat_ls$N_groups, iter, dim(b_hu)[2]))
+  for(k in 1:dim(b_s_easting)[3]) {
+    b_p_uc[,,k] <- dat_ls$Xs_easting %*% t(b_s_easting[iters,,k]) + 
+      dat_ls$Xs_northing %*% t(b_s_northing[iters,,k]) +
+      dat_ls$Xs_easting_x_northing %*% t(b_s_easting_x_northing[iters,,k])
+  }
+  for(i in 1:dim(b_p_uc)[1]) {
+    for(j in 1:dim(b_p_uc)[2]) {
+      b_p[i,j,] <- exp(b_p_uc[i,j,])/sum(exp(b_p_uc[i,j,]))
+    }
+  }
+  if(mode=="b_p") {
+    return(b_p)
+  }
+  
+  for(i in 1:ncol(preds)) {
+    ensIP[,i] <- dat_ls$X[i,,drop=F] %*% t(b_p[dat_ls$J_group[i],,])
+  }
+  if(mode=="ensIP") {
+    return(ensIP)
+  }
+  
+  for(i in 1:ncol(preds)) {
+    mu <- b_b0[iters] + b_IP[iters] * c(ensIP[,i])
+    hu <- Intercept_hu[iters] + c(dat_ls$Xc[i,,drop=F] %*% t(b_hu[iters,,drop=F])) + hu_RE[,i]
+    # hu = pr(0)
+    if(mode=="point_epred") {
+      preds[,i] <- (1-brms::inv_logit_scaled(hu)) * exp(mu)
+    } else if(mode=="point_predict") {
+      preds[,i] <- (1 - rbinom(iter, 1, brms::inv_logit_scaled(hu))) * 
+        rlnorm(iter, mu, sigma[iters]) 
+    } 
+  }
+  return(preds)
+}
+
+
+
+
 
 make_predictions_candidate <- function(out, newdata, sim, iter=2000, seed=NULL, re=FALSE) {
   library(tidyverse); library(rstan)
