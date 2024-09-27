@@ -288,3 +288,46 @@ make_predictions_candidate <- function(out, newdata, sim, iter=2000, seed=NULL, 
   return(preds)
 }
 
+
+
+
+
+
+
+
+
+metric_plot_base <- function(data, theme="ms") {
+  
+  if(theme=="ms") {
+    plot_theme <- theme(panel.grid.major.y=element_line(colour="grey85", linewidth=0.4),
+                        panel.grid.minor.y=element_line(colour="grey90", linewidth=0.2),
+                        axis.title.x=element_blank(),
+                        axis.title.y=element_text(size=9),
+                        axis.text.x=element_text(vjust=1, size=8),
+                        axis.text.y=element_text(size=8),
+                        legend.position="none")
+  } else if(theme=="talk") {
+    plot_theme <- theme(panel.grid.major.y=element_line(colour="grey85", linewidth=0.4),
+                        panel.grid.minor.y=element_line(colour="grey90", linewidth=0.2),
+                        axis.title.x=element_blank(),
+                        axis.title.y=element_text(size=9),
+                        axis.text.x=element_text(vjust=1, size=8),
+                        axis.text.y=element_text(size=8),
+                        legend.position="none")
+  } else {
+    plot_theme <- theme_classic()
+  }
+  
+  ggplot(data=data) + 
+    geom_point(aes(type, value, colour=lab_short, shape=lab_short, size=lab_short, alpha=lab_short)) +
+    scale_x_discrete(labels=label_wrap_gen(width=10)) +
+    scale_colour_manual(values=c("black", "red",
+                                 scico(2, begin=0.2, end=0.7, palette="broc", direction=1),
+                                 scico(2, begin=0.2, end=0.7, palette="broc", direction=1),
+                                 "grey50", "grey50")) +
+    scale_shape_manual(values=c(19, 19, 5, 5, 1, 1, 3, 4)) +
+    scale_size_manual(values=c(rep(2.5, 4), rep(1, 2), 1.5, 1.5)) +
+    scale_alpha_manual(values=c(1, 1, 1, 1, 0.5, 0.5, 1, 1)) +
+    facet_wrap(~metric, labeller=label_parsed) +
+    plot_theme
+}
