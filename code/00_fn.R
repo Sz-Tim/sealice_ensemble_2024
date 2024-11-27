@@ -325,7 +325,7 @@ metric_plot_base <- function(data, theme="ms") {
                                  scico(2, begin=0.2, end=0.7, palette="broc", direction=1),
                                  scico(2, begin=0.2, end=0.7, palette="broc", direction=1),
                                  "grey50", "grey50")) +
-    scale_shape_manual(values=c(19, 19, 5, 5, 1, 1, 3, 4)) +
+    scale_shape_manual(values=c(1, 1, 5, 5, 1, 1, 3, 4)) +
     scale_size_manual(values=c(rep(2.5, 4), rep(1, 2), 1.5, 1.5)) +
     scale_alpha_manual(values=c(1, 1, 1, 1, 0.5, 0.5, 1, 1)) +
     facet_wrap(~metric, labeller=label_parsed) +
